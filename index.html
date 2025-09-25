@@ -1,0 +1,2222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>JSON 双面板编辑器</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Inter","Roboto","Open Sans","Poppins","Montserrat","Outfit","Plus Jakarta Sans","DM Sans","Geist","system-ui","-apple-system","Segoe UI","Arial","sans-serif"]
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    html,body{height:100%}
+    body{background:#fff !important;color:#000 !important;overflow-x:hidden !important}
+    /* 拉伸模式：提升编辑区与结构树的可视高度（仅大屏增强） */
+    body.stretch-mode #jsonText{min-height:72vh !important}
+    body.stretch-mode #lineNumbers{min-height:72vh !important}
+    @media (min-width:1024px){
+      body.stretch-mode #treeRoot{max-height:none !important; overflow:visible !important}
+    }
+    h1,h2,h3,h4,h5,h6{color:#000 !important}
+    /* 自定义滚动条（仅黑白） */
+    ::-webkit-scrollbar{width:8px;height:8px}
+    ::-webkit-scrollbar-thumb{background:#0002;border-radius:4px}
+    ::-webkit-scrollbar-track{background:#0000}
+    /* 行号容器 */
+    .code-wrap{display:grid;grid-template-columns:auto 1fr;position:relative}
+    /* 行号容器与行样式（使用块级行，避免 inline 导致的行高误差） */
+    .gutter{user-select:none;white-space:normal;text-align:right;position:relative;will-change: transform;}
+    .ln{display:block; line-height:1.25rem;} /* 与 textarea.leading-[1.25rem] 对齐 */
+    .ln-error{position:relative; background:rgba(220,38,38,0.05);}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace}
+    /* 软换行显示，尽量在一个页面内展示全部内容（避免左右滑动） */
+    #jsonText{white-space:pre-wrap !important; overflow-wrap:break-word !important; word-break:break-word !important; overflow-x:hidden !important}
+    /* 拖拽期间为保证行号与文本严格一一对应，临时关闭软换行 */
+    #jsonText.no-wrap{
+      white-space:pre !important;
+      overflow-wrap:normal !important;
+      word-break:normal !important;
+      overflow-x:auto !important;
+    }
+    /* 用于计算换行后的可视行数的镜像容器（隐藏离屏，仅测量高度） */
+    #textMirror{
+      position:absolute; left:-99999px; top:-99999px; visibility:hidden;
+      white-space:pre-wrap !important; overflow-wrap:break-word !important; word-break:break-word !important;
+    }
+    /* modal 遮罩 */
+    .modal-mask{background:rgba(0,0,0,.36)}
+    /* 触控可达性：最小 48px 高度 */
+    .tap-target{min-height:48px;min-width:48px}
+    /* 按钮聚焦可见 */
+    .focus-ring:focus{outline:2px solid #000 !important; outline-offset:2px}
+    /* 新增闪烁高亮样式：用于新增键/项后提示定位 */
+    @keyframes flashOutline {
+      0% { outline-color: rgba(234,179,8,1); box-shadow: 0 0 0 2px rgba(234,179,8,.8) inset; }
+      50% { outline-color: rgba(234,179,8,0); box-shadow: 0 0 0 2px rgba(234,179,8,.2) inset; }
+      100% { outline-color: rgba(234,179,8,1); box-shadow: 0 0 0 2px rgba(234,179,8,.8) inset; }
+    }
+    .flash-brief {
+      outline:2px solid rgba(234,179,8,1) !important; /* amber-500 */
+      outline-offset:2px;
+      animation: flashOutline 0.6s ease-in-out 5;
+      border-radius:4px !important;
+    }
+    /* 拖拽相关样式 */
+    .drag-handle{cursor:grab}
+    .dragging{opacity:.6}
+    .drop-before{box-shadow: 0 -2px 0 0 rgba(234,179,8,1) inset}
+    .drop-after{box-shadow: 0 2px 0 0 rgba(234,179,8,1) inset}
+    /* 抓手：仅显示为一个点（依然可拖动） */
+    .drag-dot{
+      width:14px; height:14px; padding:0; border:0; background:transparent; border-radius:9999px;
+      display:inline-flex; align-items:center; justify-content:center; position:relative;
+    }
+    .drag-dot::before{
+      content:""; width:6px; height:6px; border-radius:9999px; background:rgba(0,0,0,.55);
+      box-shadow:0 0 0 1px rgba(0,0,0,.25) inset;
+    }
+    .drag-dot:hover::before{ background:#000; }
+    .drag-dot:active{ cursor:grabbing; }
+    /* 左侧文本拖拽预览高亮 */
+    .text-drag-hl{
+      position:absolute;
+      pointer-events:none;
+      border:2px solid rgba(234,179,8,1); /* amber-500 */
+      border-radius:4px;
+      box-shadow:0 0 0 2px rgba(234,179,8,.2) inset;
+      background: rgba(234,179,8,0.06); /* 更明显的块预览 */
+      z-index:5;
+    }
+    /* 插入指示线（显示插入位置） */
+    .text-insert-guide{
+      position:absolute;
+      pointer-events:none;
+      height:2px;
+      background: rgba(234,179,8,1); /* amber-500 */
+      border-radius:1px;
+      z-index:10;
+    }
+    /* 覆盖层层级：确保高于 textarea 的原生绘制 */
+    #textDragHL{ z-index:20 !important; }
+    #textDeleteHL{ z-index:30 !important; }
+    #textInsertGuide{ z-index:25 !important; }
+    /* 错误标记样式 */
+    .error-dot {
+      position:absolute;
+      width:6px;
+      height:6px;
+      background:#dc2626;
+      border-radius:50%;
+      right:2px;
+      top:50%;
+      transform:translateY(-50%);
+    }
+    .line-with-error {
+      position:relative;
+      background:rgba(220,38,38,0.05);
+    }
+    /* 错误代码片段样式 */
+    .error-frame {
+      background:#f5f5f5;
+      border:1px solid #e5e5e5;
+      border-radius:4px;
+      padding:8px 12px;
+      margin-top:8px;
+      font-size:12px;
+      line-height:1.5;
+      overflow-x:auto;
+    }
+    .error-frame-line {
+      white-space:pre;
+    }
+    .error-frame-marker {
+      color:#dc2626;
+      font-weight:bold;
+    }
+  </style>
+  <!-- Flowbite 和 Lucide 图标 -->
+  <script src="https://cdn.jsdelivr.net/npm/flowbite@2.0.0/dist/flowbite.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+</head>
+<body class="min-h-screen flex flex-col">
+  <!-- 顶部工具栏 -->
+  <header class="border-b border-black/10">
+    <div class="mx-auto max-w-7xl px-4 md:px-8">
+      <div class="flex items-center justify-between py-4">
+        <div class="flex items-center gap-4 flex-shrink-0">
+          <span class="text-2xl font-bold tracking-tight whitespace-nowrap">moli的JSON编辑器</span>
+        </div>
+        <nav class="flex items-center flex-wrap gap-2 md:gap-3 ml-auto justify-end">
+          <button id="btn-import" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">导入</button>
+          <button id="btn-export" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">导出</button>
+          <div class="w-px h-6 bg-black/10 mx-1 md:mx-2"></div>
+          <button id="btn-undo" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition" title="撤销 Ctrl+Z" disabled>撤销</button>
+          <button id="btn-redo" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition" title="前进 Ctrl+Y" disabled>前进</button>
+          <div class="w-px h-6 bg-black/10 mx-1 md:mx-2"></div>
+          <button id="btn-minify" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition" title="去除空格与换行">拍扁</button>
+          <button id="btn-pretty" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">美化</button>
+          <div class="w-px h-6 bg-black/10 mx-1 md:mx-2"></div>
+          <button id="btn-collapse-all" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">折叠全部</button>
+          <button id="btn-expand-all" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">展开全部</button>
+          <div class="w-px h-6 bg-black/10 mx-1 md:mx-2"></div>
+          <button id="btn-knowledge" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">JSON常识</button>
+          <div class="basis-full"></div>
+          <button id="btn-json2yaml" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition" title="将当前 JSON 转为 YAML">JSON→YAML</button>
+          <button id="btn-yaml2json" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition" title="将 YAML 转为 JSON">YAML→JSON</button>
+        </nav>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主体：双栏布局 -->
+  <main class="flex-1">
+    <div class="mx-auto max-w-7xl px-4 md:px-8 py-4 md:py-6">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
+        <!-- 左侧：JSON 文本 -->
+        <section class="border border-black/10 rounded !rounded-[4px]">
+          <header class="px-4 py-3 border-b border-black/10 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">内容</h2>
+            <div class="text-xs text-black/60">实时解析</div>
+          </header>
+          <div class="p-4 md:p-6">
+            <div class="code-wrap border border-black/10 rounded !rounded-[4px] overflow-hidden">
+              <div id="lineNumbers" class="gutter bg-black/5 text-black/60 px-2 py-2 mono text-[13px] leading-[1.25rem] min-h-[56vh] lg:min-h-[68vh]">1</div>
+              <textarea id="jsonText" class="mono text-[13px] leading-[1.25rem] p-2 outline-none resize-none min-h-[56vh] lg:min-h-[68vh]" spellcheck="false" aria-label="JSON 文本输入"></textarea>
+              <!-- 隐藏镜像：用于测量每一逻辑行在软换行后的视觉行数 -->
+              <div id="textMirror" class="mono text-[13px] leading-[1.25rem] p-2"></div>
+              <div id="textDragHL" class="text-drag-hl hidden"></div>
+              <div id="textDeleteHL" class="text-drag-hl hidden"></div>
+              <div id="textInsertGuide" class="text-insert-guide hidden"></div>
+            </div>
+            <div class="mt-2">
+              <div class="flex items-center gap-2">
+                <span id="textError" class="text-xs text-red-600 hidden"></span>
+              </div>
+              <div id="errorFrame" class="error-frame mono hidden"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 右侧：结构树 -->
+        <section class="border border-black/10 rounded !rounded-[4px] overflow-hidden">
+          <header class="px-4 py-3 border-b border-black/10 flex items-center justify-between">
+            <h2 class="text-lg font-semibold flex items-baseline gap-2">结构 <span class="text-xs text-black/60">(同一层级颜色相同)</span></h2>
+            <div class="flex items-center gap-2">
+              <button id="btn-root-add" class="tap-target focus-ring px-2 py-1 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition flex items-center gap-1" title="在根添加键或项">
+                <i data-lucide="plus" class="w-4 h-4"></i><span>新增</span>
+              </button>
+            </div>
+          </header>
+          <div id="treeRoot" class="p-2 md:p-4 text-sm overflow-auto overflow-x-auto max-h-[60vh] break-words lg:max-h-none lg:overflow-auto"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- 隐藏的文件选择器 -->
+  <input id="fileInput" type="file" accept=".json,application/json" class="hidden" />
+
+  <!-- 模块样 选择器（新增键/项） -->
+  <div id="templateModal" class="fixed inset-0 hidden items-center justify-center modal-mask">
+    <div class="bg-white w-[92%] max-w-xl max-h-[85vh] overflow-y-auto overflow-x-hidden overscroll-contain border border-black/20 rounded !rounded-[4px] shadow p-4 md:p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold">选择初始模块样</h3>
+        <button id="tplClose" class="tap-target focus-ring px-2 py-1 border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white">
+          关闭
+        </button>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <button data-template="object" class="tpl-btn tap-target focus-ring border border-black/20 rounded !rounded-[4px] p-3 hover:bg-black hover:text-white text-left">
+          空对象 {} 
+        </button>
+        <button data-template="array" class="tpl-btn tap-target focus-ring border border-black/20 rounded !rounded-[4px] p-3 hover:bg-black hover:text-white text-left">
+          空数组 []
+        </button>
+        <button data-template="string" class="tpl-btn tap-target focus-ring border border-black/20 rounded !rounded-[4px] p-3 hover:bg-black hover:text-white text-left">
+          字符串 ""
+        </button>
+        <button data-template="number" class="tpl-btn tap-target focus-ring border border-black/20 rounded !rounded-[4px] p-3 hover:bg-black hover:text-white text-left">
+          数字 0
+        </button>
+        <button data-template="boolean" class="tpl-btn tap-target focus-ring border border-black/20 rounded !rounded-[4px] p-3 hover:bg-black hover:text-white text-left">
+          布尔 false
+        </button>
+        <button data-template="null" class="tpl-btn tap-target focus-ring border border-black/20 rounded !rounded-[4px] p-3 hover:bg-black hover:text-white text-left">
+          空值 null
+        </button>
+        <button data-template="objectTemplate" class="tpl-btn tap-target focus-ring border border-black/20 rounded !rounded-[4px] p-3 hover:bg-black hover:text-white text-left">
+          对象模板 {"name":"","value":""}
+        </button>
+        <button data-template="arrayTemplate" class="tpl-btn tap-target focus-ring border border-black/20 rounded !rounded-[4px] p-3 hover:bg-black hover:text-white text-left">
+          数组模板 [1,2,3]
+        </button>
+      </div>
+      <div class="mt-4">
+        <label class="block text-sm mb-2">自定义初值（可选，输入合法 JSON 片段）</label>
+        <textarea id="tplCustom" class="w-full mono text-sm border border-black/20 rounded !rounded-[4px] p-2 min-h-[80px]" placeholder='如: {"title":"示例"} 或 123 或 ["a","b"]'></textarea>
+        <p class="text-xs text-black/60 mt-2">若填写了自定义初值，将优先生效。</p>
+      </div>
+      <div class="mt-4 flex items-center justify-end gap-2">
+        <button id="tplCancel" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white">取消</button>
+        <button id="tplConfirm" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JSON 常识 Modal -->
+  <div id="knowledgeModal" class="fixed inset-0 hidden items-center justify-center modal-mask">
+    <div class="bg-white w-[92%] max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden overscroll-contain border border-black/20 rounded !rounded-[4px] shadow p-4 md:p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold">JSON 常识速览</h3>
+        <button id="knClose" class="tap-target focus-ring px-2 py-1 border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white" title="关闭">×</button>
+      </div>
+      <div class="space-y-4 text-sm leading-6">
+        <div>
+          <h4 class="font-semibold mb-2">1. 结构与键名</h4>
+          <ul class="list-disc pl-6 space-y-1">
+            <li>对象 Object：使用 { }，由“键:值”对组成；键名必须是字符串，推荐使用小写英文字母、数字与下划线（如 user_name）。</li>
+            <li>数组 Array：使用 [ ]，有序列表，索引从 0 开始；适合表示一组相同类型的条目。</li>
+            <li>键名建议：语义清晰、统一风格；避免空格与特殊字符；避免和关键字/保留名冲突。</li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold mb-2">2. 值类型</h4>
+          <ul class="list-disc pl-6 space-y-1">
+            <li>string 字符串："text"（必须用双引号）</li>
+            <li>number 数字：123、-1、3.14（不支持 NaN/Infinity）</li>
+            <li>boolean 布尔：true 或 false</li>
+            <li>null 空值：null</li>
+            <li>object 对象：{ ... }，键为字符串</li>
+            <li>array 数组：[ ... ]，元素可为任意 JSON 值</li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold mb-2">3. 用法与实例（给小白看的指南）</h4>
+          <p class="mb-2">把现实世界的东西放进 JSON 里，就像是给它们分类贴标签。选对类型，数据才能清晰好用。</p>
+          <ul class="list-disc pl-6 space-y-3">
+            <li>
+              <strong>数字 (Number)</strong>：适合存放需要计算或比较大小的值。
+              <p class="text-black/60 text-xs">比如游戏角色的生命值、等级、金币数量。</p>
+              <pre class="bg-black/5 p-2 rounded mt-1 text-xs mono"><code>{ "health": 100, "level": 99, "gold": 580 }</code></pre>
+            </li>
+            <li>
+              <strong>字符串 (String)</strong>：适合存放文本信息。
+              <p class="text-black/60 text-xs">比如角色的名字、物品的描述、一段日记内容。</p>
+              <pre class="bg-black/5 p-2 rounded mt-1 text-xs mono"><code>{ "name": "英雄", "description": "一位身经百战的战士" }</code></pre>
+            </li>
+            <li>
+              <strong>布尔 (Boolean)</strong>：适合存放只有“是”或“否”两种状态的开关。
+              <p class="text-black/60 text-xs">比如“任务是否完成”、“设置是否启用”、“是否有VIP资格”。</p>
+              <pre class="bg-black/5 p-2 rounded mt-1 text-xs mono"><code>{ "isTaskCompleted": true, "isSoundOn": false }</code></pre>
+            </li>
+            <li>
+              <strong>数组 (Array)</strong>：像一个大袋子，适合存放一连串的东西，特别适合列表。
+              <p class="text-black/60 text-xs">比如一个能装各种东西的“背包”、一本有很多篇的“日记”、一串技能列表。</p>
+              <pre class="bg-black/5 p-2 rounded mt-1 text-xs mono"><code>"inventory": [
+  { "itemName": "红药水", "quantity": 5 },
+  { "itemName": "屠龙宝刀", "damage": 999 }
+]</code></pre>
+            </li>
+            <li>
+              <strong>对象 (Object)</strong>：像一张名片，适合描述一个拥有多个属性的独立事物。
+              <p class="text-black/60 text-xs">比如一个完整的“玩家角色”，它有名字、等级、背包等多个属性。</p>
+              <pre class="bg-black/5 p-2 rounded mt-1 text-xs mono"><code>"player": {
+  "name": "闪电侠",
+  "level": 50,
+  "inventory": [ ... ]
+}</code></pre>
+            </li>
+            <li>
+              <strong>空值 (Null)</strong>：表示“这里现在没有东西”，是一个明确的占位符。
+              <p class="text-black/60 text-xs">比如一个当前没有装备武器的“武器栏”。</p>
+              <pre class="bg-black/5 p-2 rounded mt-1 text-xs mono"><code>{ "equippedWeapon": null }</code></pre>
+            </li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold mb-2">4. 美观与可读性</h4>
+          <ul class="list-disc pl-6 space-y-1">
+            <li>开发调试推荐使用“美化”格式化（带缩进），传输时可“拍扁”。</li>
+            <li>键名保持一致的命名风格（如 snake_case 或 camelCase）。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="mt-4 flex items-center justify-end">
+        <button id="knOk" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- YAML 转换 Modal -->
+  <div id="yamlModal" class="fixed inset-0 hidden items-center justify-center modal-mask">
+    <div class="bg-white w-[92%] max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden overscroll-contain border border-black/20 rounded !rounded-[4px] shadow p-4 md:p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 id="yamlModalTitle" class="text-lg font-semibold">YAML 转 JSON</h3>
+        <button id="yamlClose" class="tap-target focus-ring px-2 py-1 border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white" title="关闭">×</button>
+      </div>
+      <div class="space-y-2">
+        <textarea id="yamlText" class="w-full mono text-sm border border-black/20 rounded !rounded-[4px] p-2 min-h-[200px]" placeholder="在此粘贴 YAML 内容"></textarea>
+        <p id="yamlTip" class="text-xs text-black/60">提示：导出时可复制或下载为 .yaml；导入时粘贴 YAML 并点击确定。</p>
+      </div>
+      <div class="mt-4 flex items-center justify-end gap-2">
+        <button id="yamlConvert" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white" title="将文本框中的 JSON 转为 YAML">转换</button>
+        <button id="yamlCopy" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white">复制</button>
+        <button id="yamlDownload" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white">下载 .yaml</button>
+        <button id="yamlCancel" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white">取消</button>
+        <button id="yamlConfirm" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="border-t border-black/10">
+    <div class="mx-auto max-w-7xl px-4 md:px-8 py-4"></div>
+  </footer>
+
+  <!-- 页面底部水印 -->
+  <div id="wm-bymoli" class="fixed bottom-2 left-1/2 -translate-x-1/2 z-10 text-[10px] md:text-xs tracking-wide text-black/40 select-none pointer-events-none">
+    bymoli
+  </div>
+
+  <script>
+    // 初始化图标
+    document.addEventListener("DOMContentLoaded", () => {
+      if (window.lucide) window.lucide.createIcons();
+    });
+
+    // 简易状态
+    const state = {
+      ast: {},
+      minified: false,
+      stretch: false,      // 拉伸模式：增大编辑区/结构区可视高度
+      wrap: true,          // 软换行模式：尽量避免左右滑动
+      collapse: new Set(), // 存储折叠路径
+      flashPath: null,     // 新增后需要高亮的路径字符串
+      drag: null,          // 当前拖拽上下文 { fromPathStr, fromPath }
+      history: [],         // 撤销栈（存储字符串化快照）
+      future: [],          // 前进栈
+      errorLine: null      // 当前错误行号
+    };
+    // 历史与撤销/重做
+    function snapshot() {
+      try { return JSON.stringify(state.ast); } catch (_) { return "{}"; }
+    }
+    function restoreFromSnapshot(s) {
+      try {
+        state.ast = JSON.parse(s);
+      } catch (_) {
+        state.ast = {};
+      }
+      syncFromAST();
+    }
+    function updateUndoRedo() {
+      btnUndo.disabled = state.history.length === 0;
+      btnRedo.disabled = state.future.length === 0;
+    }
+    function pushHistory() {
+      try {
+        const snap = snapshot();
+        state.history.push(snap);
+        state.future = [];
+        updateUndoRedo();
+      } catch (e) {
+        console.warn("pushHistory error:", e);
+      }
+    }
+
+    // 工具函数
+    const deepClone = (v) => JSON.parse(JSON.stringify(v));
+    const isObject = (v) => Object.prototype.toString.call(v) === "[object Object]";
+    const isArray = Array.isArray;
+    const pathJoin = (parts) => parts.join(".");
+    const getByPath = (obj, pathParts) => {
+      let cur = obj;
+      for (const k of pathParts) {
+        if (cur == null) return undefined;
+        cur = cur[k];
+      }
+      return cur;
+    };
+    const setByPath = (obj, pathParts, value) => {
+      if (pathParts.length === 0) return value;
+      let cur = obj;
+      for (let i=0;i<pathParts.length-1;i++){
+        const k = pathParts[i];
+        if (!(k in cur) || typeof cur[k] !== "object" || cur[k] === null) {
+          // 决定创建对象还是数组
+          const nextK = pathParts[i+1];
+          cur[k] = typeof nextK === "number" || (Number.isInteger(+nextK) && +nextK >= 0) ? [] : {};
+        }
+        cur = cur[k];
+      }
+      cur[pathParts[pathParts.length-1]] = value;
+      return obj;
+    };
+    const deleteByPath = (obj, pathParts) => {
+      // 返回是否删除成功，内部做更健壮的判定
+      if (!obj || !Array.isArray(pathParts) || pathParts.length === 0) return false;
+      const parentPath = pathParts.slice(0, -1);
+      const parent = parentPath.length ? getByPath(obj, parentPath) : obj;
+      const key = pathParts[pathParts.length - 1];
+
+      if (typeof parent === "undefined" || parent === null) return false;
+
+      if (Array.isArray(parent)) {
+        const idx = Number(key);
+        if (Number.isInteger(idx) && idx >= 0 && idx < parent.length) {
+          parent.splice(idx, 1);
+          return true;
+        }
+        return false;
+      } else if (isObject(parent)) {
+        if (Object.prototype.hasOwnProperty.call(parent, key)) {
+          delete parent[key];
+          return true;
+        }
+        return false;
+      }
+      return false;
+    };
+    const renameObjectKey = (obj, oldKey, newKey) => {
+      if (oldKey === newKey) return;
+      if (newKey in obj) throw new Error("键名已存在");
+      // 保持原有键顺序，仅在原位置替换键名
+      const orderedKeys = Object.keys(obj);
+      const newObj = {};
+      for (const k of orderedKeys) {
+        if (k === oldKey) {
+          newObj[newKey] = obj[oldKey];
+        } else {
+          newObj[k] = obj[k];
+        }
+      }
+      // 原地替换对象内容，避免引用丢失
+      for (const k of Object.keys(obj)) delete obj[k];
+      Object.assign(obj, newObj);
+    };
+
+    // 路径解析与重排辅助
+    const parsePathStr = (s) => {
+      if (!s) return [];
+      return s.split(".").map(seg => (String(+seg) === seg ? +seg : seg));
+    };
+    const sameParent = (a, b) => {
+      if (a.length !== b.length) return false;
+      if (a.length === 0) return true;
+      return a.slice(0,-1).every((x,i)=> x === b[i]);
+    };
+    const reorderObjectKeys = (obj, fromKey, toKey, placeBefore) => {
+      const keys = Object.keys(obj);
+      const fromIdx = keys.indexOf(fromKey);
+      const toIdx = keys.indexOf(toKey);
+      if (fromIdx === -1 || toIdx === -1) return obj;
+      const newKeys = keys.filter((k)=>k!==fromKey);
+      const insertAt = (() => {
+        const base = newKeys.indexOf(toKey);
+        return placeBefore ? base : base+1;
+      })();
+      newKeys.splice(insertAt, 0, fromKey);
+      const newObj = {};
+      newKeys.forEach(k => newObj[k] = (k===fromKey? obj[fromKey] : obj[k]));
+      // 原地覆盖
+      for (const k of Object.keys(obj)) delete obj[k];
+      Object.assign(obj, newObj);
+      return obj;
+    };
+    const reorderArrayItems = (arr, fromIndex, toIndex, placeBefore) => {
+      if (!Array.isArray(arr)) return arr;
+      const val = arr[fromIndex];
+      const clean = arr.slice(0, fromIndex).concat(arr.slice(fromIndex+1));
+      let idx = toIndex;
+      if (fromIndex < toIndex) idx = idx - 1; // 移除后目标索引左移
+      if (!placeBefore) idx = idx + 1;
+      if (idx < 0) idx = 0;
+      if (idx > clean.length) idx = clean.length;
+      clean.splice(idx, 0, val);
+      // 原地覆盖
+      arr.length = 0;
+      clean.forEach(x => arr.push(x));
+      return arr;
+    };
+
+    // 层级配色（供右侧树使用）
+    // 从高到低：红、橙、黄、绿、青、蓝、紫（超出后循环）
+    const DEPTH_COLORS = [
+      "#ef4444", // 红 red-500
+      "#f97316", // 橙 orange-500
+      "#eab308", // 黄 amber-500
+      "#22c55e", // 绿 green-500
+      "#06b6d4", // 青 cyan-500
+      "#3b82f6", // 蓝 blue-500
+      "#a855f7"  // 紫 purple-500
+    ];
+    const depthColorOf = (d)=> DEPTH_COLORS[(d >>> 0) % DEPTH_COLORS.length];
+
+    const previewReorderToText = (fromPathStr, overPathStr, placeBefore) => {
+      if (!fromPathStr || !overPathStr) return;
+      const fromPath = parsePathStr(fromPathStr);
+      const overPath = parsePathStr(overPathStr);
+      if (!sameParent(fromPath, overPath)) return;
+      const parentPath = fromPath.slice(0,-1);
+      const clone = deepClone(state.ast);
+      const parentNode = parentPath.length ? getByPath(clone, parentPath) : clone;
+      if (Array.isArray(parentNode)) {
+        reorderArrayItems(parentNode, fromPath.at(-1), overPath.at(-1), placeBefore);
+      } else if (isObject(parentNode)) {
+        reorderObjectKeys(parentNode, String(fromPath.at(-1)), String(overPath.at(-1)), placeBefore);
+      } else {
+        return;
+      }
+      // 保存当前滚动和选择状态
+      const scrollTop = elText.scrollTop;
+      const selectionStart = elText.selectionStart;
+      const selectionEnd = elText.selectionEnd;
+      
+      const txt = state.minified ? JSON.stringify(clone) : JSON.stringify(clone, null, 2);
+      elText.value = txt;
+      updateLineNumbers();
+      
+      // 恢复滚动和选择状态
+      elText.scrollTop = scrollTop;
+      try {
+        elText.setSelectionRange(selectionStart, selectionEnd);
+      } catch(e) {
+        // 忽略选择范围错误
+      }
+      
+      // 传递目标信息（overPathStr 与 placeBefore）用于在"预览文本"中计算新位置的精确高亮
+      tryShowDragBlockHighlight(fromPathStr, txt, overPathStr, placeBefore);
+    };
+
+    // DOM 引用
+    const elText = document.getElementById("jsonText");
+    const elTextHL = document.getElementById("textDragHL");
+    const elTextDelHL = document.getElementById("textDeleteHL");
+    const elTextIns = document.getElementById("textInsertGuide");
+    const elLines = document.getElementById("lineNumbers");
+    const elError = document.getElementById("textError");
+    const elErrorFrame = document.getElementById("errorFrame");
+    const elTree = document.getElementById("treeRoot");
+    const fileInput = document.getElementById("fileInput");
+    const btnImport = document.getElementById("btn-import");
+    const btnExport = document.getElementById("btn-export");
+    const btnUndo = document.getElementById("btn-undo");
+    const btnRedo = document.getElementById("btn-redo");
+    const btnMinify = document.getElementById("btn-minify");
+    const btnPretty = document.getElementById("btn-pretty");
+    const btnKnowledge = document.getElementById("btn-knowledge");
+    const btnCollapseAll = document.getElementById("btn-collapse-all");
+    const btnExpandAll = document.getElementById("btn-expand-all");
+    const btnRootAdd = document.getElementById("btn-root-add");
+    // JSON 常识 Modal 元素
+    const knowledgeModal = document.getElementById("knowledgeModal");
+    const knClose = document.getElementById("knClose");
+    const knOk = document.getElementById("knOk");
+    // YAML 转换 Modal 元素与按钮
+    const btnJson2Yaml = document.getElementById("btn-json2yaml");
+    const btnYaml2Json = document.getElementById("btn-yaml2json");
+    const yamlModal = document.getElementById("yamlModal");
+    const yamlModalTitle = document.getElementById("yamlModalTitle");
+    const yamlClose = document.getElementById("yamlClose");
+    const yamlCancel = document.getElementById("yamlCancel");
+    const yamlConfirm = document.getElementById("yamlConfirm");
+    const yamlCopy = document.getElementById("yamlCopy");
+    const yamlDownload = document.getElementById("yamlDownload");
+    const yamlText = document.getElementById("yamlText");
+    const yamlTip = document.getElementById("yamlTip");
+    const yamlConvert = document.getElementById("yamlConvert");
+    let yamlMode = "import";
+    // 预声明拖拽滚动所需的全局量，避免在 dragstart 前进入 TDZ
+    let _dragMouseY = 0;
+    let _autoScrollRAF = 0;
+
+    // 行号滚动同步：使用 transform 位移，避免独立滚动条不同步
+    function syncGutterScroll(){
+      if (!elLines || !elText) return;
+      elLines.style.transform = `translateY(${-elText.scrollTop}px)`;
+    }
+
+    // 模板选择器
+    const modal = document.getElementById("templateModal");
+    const tplClose = document.getElementById("tplClose");
+    const tplCancel = document.getElementById("tplCancel");
+    const tplConfirm = document.getElementById("tplConfirm");
+    const tplCustom = document.getElementById("tplCustom");
+    const templateButtons = () => Array.from(document.querySelectorAll(".tpl-btn"));
+
+    let pendingAddContext = null; // { parentPath: [], forArray: boolean }
+    let pendingTemplate = null;
+
+    function openTemplateModal(ctx){
+      pendingAddContext = ctx;
+      pendingTemplate = null;
+      tplCustom.value = "";
+      templateButtons().forEach(b => b.classList.remove("bg-black","text-white"));
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+    }
+    function closeTemplateModal(){
+      pendingAddContext = null;
+      pendingTemplate = null;
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+    }
+    templateButtons().forEach(btn => {
+      btn.addEventListener("click", () => {
+        templateButtons().forEach(b => b.classList.remove("bg-black","text-white"));
+        btn.classList.add("bg-black","text-white");
+        pendingTemplate = btn.getAttribute("data-template");
+      });
+    });
+    tplClose.addEventListener("click", closeTemplateModal);
+    tplCancel.addEventListener("click", closeTemplateModal);
+    tplConfirm.addEventListener("click", () => {
+      let value;
+      const custom = tplCustom.value.trim();
+      if (custom) {
+        try {
+          value = JSON.parse(custom);
+        } catch (e){
+          alert("自定义初值不是合法 JSON");
+          return;
+        }
+      } else {
+        switch (pendingTemplate) {
+          case "object": value = {}; break;
+          case "array": value = []; break;
+          case "string": value = ""; break;
+          case "number": value = 0; break;
+          case "boolean": value = false; break;
+          case "null": value = null; break;
+          case "objectTemplate": value = { name: "", value: "" }; break;
+          case "arrayTemplate": value = [1,2,3]; break;
+          default:
+            alert("请选择一个模块样或填写自定义初值");
+            return;
+        }
+      }
+      if (!pendingAddContext) return;
+      const { parentPath, forArray } = pendingAddContext;
+      const parent = parentPath.length ? getByPath(state.ast, parentPath) : state.ast;
+      try{
+        pushHistory();
+        if (forArray) {
+          parent.push(value);
+          // 高亮新插入的数组索引
+          state.flashPath = pathJoin(parentPath.concat(parent.length - 1));
+        } else {
+          // 生成唯一键名
+          let base = "新键";
+          let key = base;
+          let i = 1;
+          while (key in parent) { key = base + i; i++; }
+          parent[key] = value;
+          // 高亮新键
+          state.flashPath = pathJoin(parentPath.concat(key));
+        }
+        syncFromAST();
+        closeTemplateModal();
+      } catch(e){
+        alert("新增失败：" + e.message);
+      }
+    });
+
+    // 文本侧：行号与解析（支持软换行对齐：为每个逻辑行追加空白行占位）
+    function updateLineNumbers(){
+      if (!state.wrap) return updateLineNumbersNoWrap();
+      const lineHeight = parseFloat(getComputedStyle(elText).lineHeight) || 20;
+      const mirror = document.getElementById("textMirror");
+      if (!mirror) return updateLineNumbersNoWrap();
+      // 镜像容器需匹配文本宽度与字体样式
+      mirror.style.width = elText.clientWidth + "px";
+      mirror.style.fontFamily = getComputedStyle(elText).fontFamily;
+      mirror.style.fontSize = getComputedStyle(elText).fontSize;
+      mirror.style.lineHeight = getComputedStyle(elText).lineHeight;
+      mirror.style.padding = getComputedStyle(elText).padding;
+
+      const raw = elText.value;
+      const parts = raw.split("\n");
+      let html = "";
+      for (let i=0;i<parts.length;i++){
+        const text = parts[i];
+        // 准备测量块
+        const span = document.createElement("div");
+        span.style.whiteSpace = "pre-wrap";
+        span.style.wordBreak = "break-word";
+        span.textContent = text.length ? text : " "; // 空行亦需占位
+        mirror.innerHTML = "";
+        mirror.appendChild(span);
+        const rows = Math.max(1, Math.round(span.offsetHeight / lineHeight));
+
+        // 第一视觉行显示数字，其余视觉行显示空白以对齐
+        if (state.errorLine === (i+1)) {
+          html += `<div class="ln ln-error">${i+1}<span class="error-dot"></span></div>`;
+        } else {
+          html += `<div class="ln">${i+1}</div>`;
+        }
+        for (let r=1; r<rows; r++){
+          html += `<div class="ln">&nbsp;</div>`;
+        }
+      }
+      elLines.innerHTML = html;
+      syncGutterScroll();
+    }
+
+    // 不换行情况下的简易行号
+    function updateLineNumbersNoWrap(){
+      const count = elText.value.split("\n").length || 1;
+      let html = "";
+      for (let i=1;i<=count;i++){
+        if (state.errorLine === i) html += `<div class="ln ln-error">${i}<span class="error-dot"></span></div>`;
+        else html += `<div class="ln">${i}</div>`;
+      }
+      elLines.innerHTML = html;
+      syncGutterScroll();
+    }
+    elText.addEventListener("input", () => {
+      updateLineNumbers();
+      scheduleParse();
+    });
+    elText.addEventListener("scroll", () => {
+      syncGutterScroll();
+    });
+
+    // 防抖解析
+    let parseTimer = null;
+    function scheduleParse(){
+      if (parseTimer) clearTimeout(parseTimer);
+      parseTimer = setTimeout(tryParseAndApply, 200);
+    }
+
+    // 将常见 JSON.parse 错误转为中文，并尽量给出行列号和修复建议
+    function translateJsonError(err, text){
+      const msg = String(err && err.message || "");
+      let zh = "JSON 解析错误";
+      let hint = "";
+      
+      // 提取 position
+      let pos = -1;
+      const m = msg.match(/position\s+(\d+)/i) || msg.match(/at\s+position\s+(\d+)/i);
+      if (m) pos = Number(m[1]);
+
+      // 计算行列
+      let line = null, col = null;
+      if (!Number.isNaN(pos) && pos >= 0 && pos <= text.length) {
+        const upto = text.slice(0, pos);
+        line = (upto.match(/\n/g)?.length || 0) + 1;
+        const lastNL = upto.lastIndexOf("\n");
+        col = pos - (lastNL >= 0 ? lastNL + 1 : 0) + 1;
+      }
+
+      // 获取错误位置的上下文
+      let contextChar = "";
+      let prevChar = "";
+      let nextChar = "";
+      if (pos >= 0 && pos < text.length) {
+        contextChar = text[pos];
+        if (pos > 0) prevChar = text[pos - 1];
+        if (pos < text.length - 1) nextChar = text[pos + 1];
+      }
+
+      // 常见错误类型判断与修复建议
+      if (/Unexpected token\s*}/i.test(msg)) {
+        zh = "意外的右花括号 }";
+        hint = "可能是多余的右括号，或者前面缺少左括号";
+      } else if (/Unexpected token\s*]/i.test(msg)) {
+        zh = "意外的右方括号 ]";
+        hint = "可能是多余的右括号，或者前面缺少左括号";
+      } else if (/Unexpected token\s*{/i.test(msg)) {
+        zh = "意外的左花括号 {";
+        hint = "可能前面缺少逗号或冒号";
+      } else if (/Unexpected token\s*\[/i.test(msg)) {
+        zh = "意外的左方括号 [";
+        hint = "可能前面缺少逗号或冒号";
+      } else if (/Unexpected token\s*:/i.test(msg)) {
+        zh = "意外的冒号 :";
+        hint = "冒号只能用在对象的键值对中";
+      } else if (/Unexpected token\s*,/i.test(msg)) {
+        zh = "意外的逗号 ,";
+        hint = "可能是多余的逗号，或者后面缺少内容";
+      } else if (/Unexpected token\s*"([^"]*)"/i.test(msg)) {
+        zh = "意外的字符串";
+        hint = "可能前面缺少逗号分隔符";
+      } else if (/Unexpected end of JSON input/i.test(msg)) {
+        zh = "JSON 意外结束";
+        hint = "文件不完整，可能缺少闭合的括号、引号或内容";
+      } else if (/Unexpected number/i.test(msg)) {
+        zh = "意外的数字";
+        hint = "数字前面可能缺少逗号分隔符";
+      } else if (/Unexpected string/i.test(msg)) {
+        zh = "意外的字符串";
+        hint = "字符串前面可能缺少逗号分隔符";
+      } else if (/Unexpected non-whitespace character/i.test(msg)) {
+        zh = "意外的非空白字符";
+        hint = "JSON 数据后面不应有额外内容";
+      } else if (/Expected property name/i.test(msg)) {
+        zh = "缺少属性名";
+        hint = "对象的键必须是字符串";
+      } else if (/Expected ':'/i.test(msg)) {
+        zh = "缺少冒号";
+        hint = "对象的键值对之间需要用冒号分隔";
+      } else if (/Expected ','/i.test(msg)) {
+        zh = "缺少逗号";
+        hint = "数组元素或对象属性之间需要用逗号分隔";
+      } else if (/Unexpected token ([a-zA-Z]+)/i.test(msg)) {
+        const match = msg.match(/Unexpected token ([a-zA-Z]+)/i);
+        if (match) {
+          const token = match[1];
+          if (token === 'undefined') {
+            zh = "出现了 undefined";
+            hint = "JSON 不支持 undefined，请使用 null";
+          } else if (token === 'NaN') {
+            zh = "出现了 NaN";
+            hint = "JSON 不支持 NaN，请使用 null 或有效数字";
+          } else if (token === 'Infinity') {
+            zh = "出现了 Infinity";
+            hint = "JSON 不支持 Infinity，请使用 null 或有效数字";
+          } else {
+            zh = `意外的标识符 ${token}`;
+            hint = "可能是未加引号的键名或无效的值";
+          }
+        }
+      } else if (/Unexpected token/i.test(msg)) {
+        zh = `意外的符号 "${contextChar}"`;
+        hint = "检查该位置的语法是否正确";
+      } else if (/in JSON at position/i.test(msg)) {
+        zh = "JSON 格式错误";
+        hint = "检查该位置附近的语法";
+      } else {
+        zh = "JSON 解析失败";
+        hint = "请检查 JSON 格式是否正确";
+      }
+
+      // 根据上下文提供更精确的建议
+      if (prevChar === "}" && contextChar === "{") {
+        hint = "对象之间缺少逗号分隔符";
+      } else if (prevChar === "]" && contextChar === "[") {
+        hint = "数组之间缺少逗号分隔符";
+      } else if (prevChar === "}" && contextChar === '"') {
+        hint = "对象后面缺少逗号分隔符";
+      } else if (prevChar === "]" && contextChar === '"') {
+        hint = "数组后面缺少逗号分隔符";
+      } else if (prevChar === '"' && contextChar === '"' && pos > 1) {
+        // 检查是否是键值对
+        let checkPos = pos - 2;
+        while (checkPos >= 0 && /\s/.test(text[checkPos])) checkPos--;
+        if (checkPos >= 0 && text[checkPos] !== ':' && text[checkPos] !== ',' && text[checkPos] !== '[' && text[checkPos] !== '{') {
+          hint = "字符串之间缺少逗号分隔符";
+        }
+      }
+
+      return {
+        message: zh,
+        hint: hint,
+        line: line,
+        col: col,
+        pos: pos
+      };
+    }
+
+    // 生成错误代码片段
+    function generateErrorFrame(text, line, col) {
+      if (!line || !text) return "";
+      
+      const lines = text.split('\n');
+      const lineIdx = line - 1;
+      
+      if (lineIdx < 0 || lineIdx >= lines.length) return "";
+      
+      let html = '<div class="error-frame-content">';
+      
+      // 显示前一行（如果存在）
+      if (lineIdx > 0) {
+        const prevLine = lines[lineIdx - 1];
+        const lineNum = String(line - 1).padStart(4, ' ');
+        html += `<div class="error-frame-line text-black/40">${lineNum} | ${escapeHtml(prevLine)}</div>`;
+      }
+      
+      // 显示错误行
+      const errorLine = lines[lineIdx];
+      const lineNum = String(line).padStart(4, ' ');
+      html += `<div class="error-frame-line"><span class="error-frame-marker">${lineNum} | ${escapeHtml(errorLine)}</span></div>`;
+      
+      // 显示错误位置标记
+      if (col && col > 0) {
+        const spaces = ' '.repeat(6 + Math.min(col - 1, errorLine.length));
+        html += `<div class="error-frame-line error-frame-marker">${spaces}^</div>`;
+      }
+      
+      // 显示后一行（如果存在）
+      if (lineIdx < lines.length - 1) {
+        const nextLine = lines[lineIdx + 1];
+        const lineNum = String(line + 1).padStart(4, ' ');
+        html += `<div class="error-frame-line text-black/40">${lineNum} | ${escapeHtml(nextLine)}</div>`;
+      }
+      
+      html += '</div>';
+      return html;
+    }
+
+    // HTML 转义
+    function escapeHtml(text) {
+      const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+      };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    // 自动修复功能已移除
+
+    function tryParseAndApply(){
+      parseTimer = null;
+      const txt = elText.value;
+      try {
+        const parsed = JSON.parse(txt);
+        // 清除错误状态
+        elError.classList.add("hidden");
+        elErrorFrame.classList.add("hidden");
+        elErrorFrame.innerHTML = "";
+        state.errorLine = null;
+        updateLineNumbers();
+        state.ast = parsed;
+        renderTree();
+      } catch (e){
+        // 显示错误信息
+        const errInfo = translateJsonError(e, txt);
+        
+        // 显示主错误信息
+        let errorText = errInfo.message;
+        if (errInfo.hint) {
+          errorText += " - " + errInfo.hint;
+        }
+        elError.textContent = errorText;
+        elError.classList.remove("hidden");
+        
+        // 显示错误代码片段
+        if (errInfo.line && errInfo.col) {
+          const frameHtml = generateErrorFrame(txt, errInfo.line, errInfo.col);
+          if (frameHtml) {
+            elErrorFrame.innerHTML = frameHtml;
+            elErrorFrame.classList.remove("hidden");
+          }
+        }
+        
+        // 标记错误行
+        state.errorLine = errInfo.line;
+        updateLineNumbers();
+      }
+    }
+
+    // 自动修复按钮相关逻辑已移除
+
+    // 树渲染
+    function isCollapsed(pathStr){ return state.collapse.has(pathStr); }
+    function setCollapsed(pathStr, v){
+      if (v) state.collapse.add(pathStr);
+      else state.collapse.delete(pathStr);
+    }
+
+    function nodeControls(pathParts, parent, key, value, depth){
+      const pathStr = pathJoin(pathParts);
+      const container = document.createElement("div");
+      container.className = "flex items-center gap-2 py-1 min-w-0";
+      // 记录该行对应的路径，便于新增后高亮定位
+      container.dataset.path = pathStr;
+
+      // 拖拽把手
+      const handle = document.createElement("button");
+      handle.type = "button";
+      handle.className = "drag-handle drag-dot focus-ring";
+      handle.title = "拖动以在同级重排";
+      handle.setAttribute("aria-label","拖动以在同级重排");
+      container.appendChild(handle);
+
+      // 绑定拖拽：仅同级内重排（对象键或数组项）
+      handle.draggable = true;
+      handle.addEventListener("dragstart", (e) => {
+        e.dataTransfer.effectAllowed = "move";
+        state.drag = {
+          fromPathStr: pathStr,
+          fromPath: parsePathStr(pathStr),
+        };
+        container.classList.add("dragging");
+
+        // 拖拽开始时，为了保证左侧高亮与行号严格一一对应，统一使用 AST 规范化文本并临时关闭软换行
+        state.drag.prevWrap = !!state.wrap;
+        // 临时关闭软换行，避免视觉行合并导致的对齐偏差
+        if (state.wrap) {
+          state.wrap = false;
+          elText.classList.add("no-wrap");
+        }
+        // 规范化文本：移除用户输入中的额外空行/不一致缩进，避免预览块受“空行个数”影响错位
+        const prevScroll = elText.scrollTop;
+        const canonicalTxt = state.minified ? JSON.stringify(state.ast) : JSON.stringify(state.ast, null, 2);
+        elText.value = canonicalTxt;
+        updateLineNumbers();
+        elText.scrollTop = prevScroll;
+
+        // 刚开始拖拽时，基于规范化文本显示一次左侧块高亮
+        tryShowDragBlockHighlight(pathStr, canonicalTxt);
+
+        // 启动自动滚动循环
+        if (typeof _autoScrollRAF !== "undefined" && _autoScrollRAF) {
+          // 已存在循环，无需重复
+        } else {
+          _autoScrollRAF = requestAnimationFrame(autoScrollTick);
+        }
+      });
+      handle.addEventListener("dragend", (e) => {
+        container.classList.remove("dragging");
+        // 停止自动滚动循环
+        if (typeof _autoScrollRAF !== "undefined" && _autoScrollRAF) {
+          cancelAnimationFrame(_autoScrollRAF);
+          _autoScrollRAF = 0;
+        }
+        // 拖拽取消则恢复文本为真实 AST
+        if (state.drag) {
+          const prevWrap = state.drag.prevWrap;
+          state.drag = null;
+          hideDragBlockHighlight();
+          hideInsertGuide();
+          // 恢复之前的换行模式
+          if (typeof prevWrap === "boolean") {
+            state.wrap = prevWrap;
+            // 如拖拽前开启了软换行，则移除临时 no-wrap
+            if (prevWrap) elText.classList.remove("no-wrap");
+            updateLineNumbers();
+          }
+          syncFromAST();
+        }
+      });
+
+      // 目标行接收拖拽
+      container.addEventListener("dragover", (e) => {
+        if (!state.drag || !state.drag.fromPathStr) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        // 仅允许同级重排
+        const overPath = parsePathStr(pathStr);
+        if (!sameParent(state.drag.fromPath, overPath)) return;
+        const rect = container.getBoundingClientRect();
+        const before = (e.clientY - rect.top) < rect.height / 2;
+        container.classList.toggle("drop-before", before);
+        container.classList.toggle("drop-after", !before);
+        // 左侧文本显示预期顺序
+        previewReorderToText(state.drag.fromPathStr, pathStr, before);
+      });
+      container.addEventListener("dragleave", () => {
+        container.classList.remove("drop-before","drop-after");
+        // 离开当前目标时立即隐藏插入指示线，避免残留
+        hideInsertGuide();
+      });
+      container.addEventListener("drop", (e) => {
+        if (!state.drag || !state.drag.fromPathStr) return;
+        e.preventDefault();
+        const fromPath = state.drag.fromPath;
+        const overPath = parsePathStr(pathStr);
+        if (!sameParent(fromPath, overPath)) {
+          container.classList.remove("drop-before","drop-after");
+          // 停止自动滚动循环
+          if (typeof _autoScrollRAF !== "undefined" && _autoScrollRAF) {
+            cancelAnimationFrame(_autoScrollRAF);
+            _autoScrollRAF = 0;
+          }
+          // 在清空 drag 之前取出之前的换行状态
+          const prevWrap = (state.drag && typeof state.drag.prevWrap === "boolean") ? state.drag.prevWrap : null;
+          state.drag = null;
+          hideDragBlockHighlight();
+          hideInsertGuide();
+          if (prevWrap !== null) {
+            state.wrap = prevWrap;
+            if (prevWrap) elText.classList.remove("no-wrap");
+            updateLineNumbers();
+          }
+          syncFromAST();
+          return;
+        }
+        const rect = container.getBoundingClientRect();
+        const before = (e.clientY - rect.top) < rect.height / 2;
+
+        const parentPath = fromPath.slice(0,-1);
+        const parentNode = parentPath.length ? getByPath(state.ast, parentPath) : state.ast;
+
+        if (Array.isArray(parentNode)) {
+          pushHistory();
+          reorderArrayItems(parentNode, fromPath.at(-1), overPath.at(-1), before);
+        } else if (isObject(parentNode)) {
+          pushHistory();
+          reorderObjectKeys(parentNode, String(fromPath.at(-1)), String(overPath.at(-1)), before);
+        }
+        // 停止自动滚动循环
+        if (typeof _autoScrollRAF !== "undefined" && _autoScrollRAF) {
+          cancelAnimationFrame(_autoScrollRAF);
+          _autoScrollRAF = 0;
+        }
+        // 在清空 drag 之前取出之前的换行状态
+        const prevWrap2 = (state.drag && typeof state.drag.prevWrap === "boolean") ? state.drag.prevWrap : null;
+        state.drag = null;
+        container.classList.remove("drop-before","drop-after");
+        hideDragBlockHighlight();
+        hideInsertGuide();
+        if (prevWrap2 !== null) {
+          state.wrap = prevWrap2;
+          if (prevWrap2) elText.classList.remove("no-wrap");
+          updateLineNumbers();
+        }
+        syncFromAST();
+      });
+
+      // 展开折叠按钮（仅对象/数组）
+      if (isObject(value) || isArray(value)) {
+        const btn = document.createElement("button");
+        btn.className = "tap-target focus-ring px-1 py-0.5 border border-black/20 rounded !rounded-[4px] text-xs hover:bg-black hover:text-white";
+        btn.textContent = isCollapsed(pathStr) ? "展开" : "折叠";
+        btn.addEventListener("click", () => {
+          setCollapsed(pathStr, !isCollapsed(pathStr));
+          renderTree();
+        });
+        container.appendChild(btn);
+      } else {
+        const dot = document.createElement("div");
+        dot.className = "w-2 h-2 rounded-full";
+        try { dot.style.backgroundColor = depthColorOf(depth); } catch(_) {}
+        container.appendChild(dot);
+      }
+
+      // 键名（对象时可编辑）
+      if (parent && !isArray(parent)) {
+        const keyInput = document.createElement("input");
+        keyInput.className = "focus-ring border border-black/20 rounded !rounded-[4px] px-2 py-1 text-sm w-[160px] max-w-[40%] min-w-0 truncate";
+        keyInput.value = key;
+        try { keyInput.style.color = depthColorOf(depth); } catch(_) {}
+        keyInput.title = "点击以重命名键";
+        keyInput.readOnly = true;
+        // 点击进入编辑，失焦应用与回退，避免误删
+        keyInput.addEventListener("focus", () => {
+          keyInput.readOnly = false;
+          keyInput.select();
+        });
+        keyInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            keyInput.blur();
+          } else if (e.key === "Escape") {
+            // 取消修改并还原显示
+            keyInput.value = key;
+            keyInput.blur();
+          }
+        });
+        keyInput.addEventListener("blur", () => {
+          // 结束编辑，锁定输入框
+          keyInput.readOnly = true;
+          const newKey = keyInput.value.trim();
+          // 空或未变更则回退显示并不触发写入
+          if (!newKey || newKey === key) {
+            keyInput.value = key;
+            return;
+          }
+          try {
+            pushHistory();
+            renameObjectKey(parent, key, newKey);
+            syncFromAST();
+          } catch (e){
+            alert(e.message);
+            // 冲突或错误则回退显示
+            keyInput.value = key;
+          }
+        });
+        container.appendChild(keyInput);
+      } else {
+        // 数组项索引或根
+        const label = document.createElement("span");
+        label.className = "text-black/60";
+        label.textContent = parent ? "["+key+"]" : "(root)";
+        try { label.style.color = depthColorOf(depth); } catch(_) {}
+        container.appendChild(label);
+      }
+
+      // 类型切换（显示中英文：object（对象）、array（数组）等）
+      const typeSelect = document.createElement("select");
+      typeSelect.className = "focus-ring border border-black/20 rounded !rounded-[4px] px-2 py-1 text-sm";
+      const types = ["object","array","string","number","boolean","null"];
+      const zhMap = {
+        object: "对象",
+        array: "数组",
+        string: "字符串",
+        number: "数字",
+        boolean: "布尔",
+        null: "空值"
+      };
+      const curType =
+        value === null ? "null" :
+        isArray(value) ? "array" :
+        isObject(value) ? "object" :
+        typeof value;
+      for (const t of types){
+        const opt = document.createElement("option");
+        opt.value = t;
+        // 中英双语标签，符合黑白配色与极简风格
+        opt.textContent = `${t}（${zhMap[t]}）`;
+        if (t === curType) opt.selected = true;
+        typeSelect.appendChild(opt);
+      }
+      typeSelect.addEventListener("change", () => {
+        const t = typeSelect.value;
+        let nv;
+        switch (t){
+          case "object": nv = {}; break;
+          case "array": nv = []; break;
+          case "string": nv = ""; break;
+          case "number": nv = 0; break;
+          case "boolean": nv = false; break;
+          case "null": nv = null; break;
+        }
+        const parentPath = pathParts.slice(0,-1);
+        const lastKey = pathParts[pathParts.length-1];
+        const parentNode = parentPath.length ? getByPath(state.ast, parentPath) : state.ast;
+        pushHistory();
+        if (isArray(parentNode)) parentNode[lastKey] = nv;
+        else if (isObject(parentNode)) parentNode[lastKey] = nv;
+        syncFromAST();
+      });
+      container.appendChild(typeSelect);
+
+      // 值编辑（对非对象/数组）
+      if (!(isObject(value) || isArray(value))) {
+        const valInput = document.createElement("input");
+        valInput.className = "focus-ring border border-black/20 rounded !rounded-[4px] px-2 py-1 text-sm w-0 flex-1 min-w-0 max-w-full truncate";
+        valInput.value = typeof value === "string" ? value : String(value);
+        valInput.placeholder = "编辑值";
+        // 防止回车或退格键影响其他控件
+        valInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            valInput.blur();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            // 还原当前 AST 值
+            const cur = (function(){
+              const parentPath = pathParts.slice(0,-1);
+              const lastKey = pathParts[pathParts.length-1];
+              const parentNode = parentPath.length ? getByPath(state.ast, parentPath) : state.ast;
+              return parentNode ? parentNode[lastKey] : value;
+            })();
+            valInput.value = typeof cur === "string" ? cur : String(cur);
+            valInput.blur();
+          }
+        });
+        // 实时更新（输入节流到 blur 时最终同步），避免“看似删除”
+        const applyValue = () => {
+          const v = valInput.value;
+          let newVal;
+          const t = typeSelect.value;
+          try{
+            if (t === "number") {
+              // 允许临时空字符串显示，不立即写入 undefined
+              if (v.trim() === "") return;
+              newVal = Number(v);
+              if (Number.isNaN(newVal)) return; // 非法数字不写入
+            } else if (t === "boolean") {
+              if (v !== "true" && v !== "false") return;
+              newVal = (v === "true");
+            } else if (t === "null") {
+              // null 类型固定为 null，忽略输入框值
+              newVal = null;
+            } else if (t === "string") {
+              newVal = v;
+            } else {
+              // 兜底：按字符串处理
+              newVal = v;
+            }
+            const parentPath = pathParts.slice(0,-1);
+            const lastKey = pathParts[pathParts.length-1];
+            const parentNode = parentPath.length ? getByPath(state.ast, parentPath) : state.ast;
+            if (!parentNode) return;
+            pushHistory();
+            parentNode[lastKey] = newVal;
+            syncFromAST();
+          } catch(e){
+            // 不做删除操作，只提示
+            console.warn("更新失败:", e);
+          }
+        };
+        valInput.addEventListener("blur", applyValue);
+        valInput.addEventListener("change", applyValue);
+        container.appendChild(valInput);
+      }
+
+      // 添加/删除
+      if (isObject(value) || isArray(value)) {
+        const addBtn = document.createElement("button");
+        addBtn.className = "tap-target focus-ring px-2 py-1 border border-black/20 rounded !rounded-[4px] text-sm hover:bg-black hover:text-white";
+        addBtn.textContent = "新增";
+        addBtn.title = isArray(value) ? "追加数组项" : "新增对象键";
+        addBtn.addEventListener("click", () => {
+          openTemplateModal({ parentPath: pathParts, forArray: isArray(value) });
+        });
+        container.appendChild(addBtn);
+      }
+      if (pathParts.length > 0) {
+        const delBtn = document.createElement("button");
+        delBtn.className = "tap-target focus-ring px-2 py-1 border border-black/20 rounded !rounded-[4px] text-sm hover:bg-black hover:text-white";
+        delBtn.textContent = "删除";
+        delBtn.type = "button";
+        delBtn.addEventListener("click", () => {
+          if (!confirm("确认删除该项？")) return;
+          // 删除前在左侧文本面板高亮将被删除的块
+          flashDeletedBlockByPath(pathParts);
+          // 先尝试删除，成功后再记录历史，避免无效操作干扰历史栈
+          const cloned = deepClone(state.ast);
+          const ok = deleteByPath(cloned, pathParts);
+          if (!ok) {
+            alert("删除失败：目标不存在或路径无效");
+            return;
+          }
+          // 正式提交
+          pushHistory();
+          state.ast = cloned;
+          syncFromAST();
+        });
+        container.appendChild(delBtn);
+      }
+
+      return container;
+    }
+
+    function renderNode(parent, key, value, pathParts, depth){
+      const wrapper = document.createElement("div");
+      wrapper.className = "pl-4";
+      const row = nodeControls(pathParts, parent, key, value, depth);
+      wrapper.appendChild(row);
+
+      const pathStr = pathJoin(pathParts);
+      if (isObject(value) || isArray(value)) {
+        if (!isCollapsed(pathStr)) {
+          const children = document.createElement("div");
+          children.className = "mt-1 border-l border-black/10";
+          if (isObject(value)) {
+            Object.keys(value).forEach(k => {
+              children.appendChild(renderNode(value, k, value[k], pathParts.concat(k), depth+1));
+            });
+          } else {
+            value.forEach((v, idx) => {
+              children.appendChild(renderNode(value, idx, v, pathParts.concat(idx), depth+1));
+            });
+          }
+          wrapper.appendChild(children);
+        }
+      }
+      return wrapper;
+    }
+
+    function renderTree(){
+      // 清空
+      elTree.innerHTML = "";
+      const rootPath = [];
+      const rootRow = nodeControls(rootPath, null, null, state.ast, 0);
+      elTree.appendChild(rootRow);
+
+      if (!isCollapsed("")) {
+        const children = document.createElement("div");
+        children.className = "mt-1 border-l border-black/10";
+        if (isObject(state.ast)) {
+          Object.keys(state.ast).forEach(k => {
+            children.appendChild(renderNode(state.ast, k, state.ast[k], [k], 1));
+          });
+        } else if (isArray(state.ast)) {
+          state.ast.forEach((v, idx) => {
+            children.appendChild(renderNode(state.ast, idx, v, [idx], 1));
+          });
+        } else {
+          // 原始类型根节点，不渲染子级
+        }
+        elTree.appendChild(children);
+      }
+
+      // 重新创建图标
+      if (window.lucide) window.lucide.createIcons();
+    }
+
+    // 新增项/键后的高亮函数：根据 data-path 精确匹配并闪烁几秒
+    function highlightPathOnce(pathStr){
+      if (pathStr == null) return;
+      const nodes = elTree.querySelectorAll('[data-path]');
+      let target = null;
+      for (const n of nodes){
+        if (n.dataset && n.dataset.path === String(pathStr)) { target = n; break; }
+      }
+      if (target){
+        target.classList.add("flash-brief");
+        try { target.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch(_) {}
+        setTimeout(() => target.classList.remove("flash-brief"), 3000);
+      }
+    }
+
+    // 计算并显示左侧拖拽块的文本高亮（基于 fromPath 在预览文本中的首次匹配）
+    let _dragHL = null; // {startLine,endLine}
+
+    // fromPathStr: 被拖动的原始路径
+    // previewText: 当前“预览后的文本”（已经按 hover 位置模拟了重排）
+    // overPathStr: 当前悬停目标路径（可选）
+    // placeBefore: 是否在目标之前插入（可选）
+    function tryShowDragBlockHighlight(fromPathStr, previewText, overPathStr = null, placeBefore = null){
+      // 在软换行模式下，基于“逻辑行号”的块定位会与视觉行不一致，直接关闭左侧黄色块预览
+      if (state.wrap) { hideDragBlockHighlight(); hideInsertGuide(); return; }
+      if (!fromPathStr) { hideDragBlockHighlight(); hideInsertGuide(); return; }
+
+      // 解析预览文本为 AST，用它来确定父级范围与目标新位置
+      let previewAST;
+      try {
+        previewAST = JSON.parse(previewText);
+      } catch (_) {
+        return hideDragBlockHighlight();
+      }
+
+      const fromPath = parsePathStr(fromPathStr);
+      const nodeVal = getByPath(state.ast, fromPath); // 使用真实 AST 获取被拖动节点值（值内容本身不受预览影响）
+      if (typeof nodeVal === "undefined") return hideDragBlockHighlight();
+
+      // stringify helpers
+      const stringify = (v) => state.minified ? JSON.stringify(v) : JSON.stringify(v, null, 2);
+      const escapeReg = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const makeFlexibleBlockPattern = (s) => escapeReg(s).replace(/\n/g, "\\s*\\n\\s*");
+
+      const parentPath = fromPath.slice(0, -1);
+      const isRoot = parentPath.length === 0;
+
+      // 父级值使用“预览 AST”中的父节点（其内部顺序已按预览重排）
+      const parentValPreview = isRoot ? previewAST : getByPath(previewAST, parentPath);
+
+      const fullText = previewText;
+      let scopeStart = 0;
+      let scopeEnd = fullText.length;
+
+      // 在预览文本中定位父级块范围
+      if (!isRoot && (isObject(parentValPreview) || Array.isArray(parentValPreview))) {
+        const parentStr = stringify(parentValPreview);
+        let parentIdx = fullText.indexOf(parentStr);
+        if (parentIdx === -1 && parentStr.includes("\n")) {
+          try {
+            const parentRe = new RegExp(makeFlexibleBlockPattern(parentStr), "m");
+            const m = parentRe.exec(fullText);
+            if (m) parentIdx = m.index;
+          } catch (_) {}
+        }
+        if (parentIdx !== -1) {
+          scopeStart = parentIdx;
+          scopeEnd = parentIdx + Math.min(parentStr.length + 4096, fullText.length - parentIdx);
+        }
+      }
+
+      const scopedText = fullText.slice(scopeStart, scopeEnd);
+      const blockStr = stringify(nodeVal);
+      const childPattern = makeFlexibleBlockPattern(blockStr);
+      let hitIndexInScope = -1;
+      let linesInBlock = (blockStr.match(/\n/g)?.length || 0) + 1;
+
+      if (isRoot) {
+        // 根节点：直接在全局范围匹配
+        hitIndexInScope = scopedText.indexOf(blockStr);
+        if (hitIndexInScope === -1 && linesInBlock > 1) {
+          try {
+            const re = new RegExp(childPattern, "m");
+            const m = re.exec(scopedText);
+            if (m) hitIndexInScope = m.index;
+          } catch(_) {}
+        }
+      } else if (Array.isArray(parentValPreview)) {
+        // 计算在“预览后”的目标出现序号
+        let occurrenceWanted = fromPath[fromPath.length - 1];
+        if (overPathStr && state.drag && sameParent(fromPath, parsePathStr(overPathStr))) {
+          // 依据预览重排规则计算目标插入索引
+          const fromIndex = fromPath.at(-1);
+          const overIndex = parsePathStr(overPathStr).at(-1);
+          let idx = overIndex;
+          if (fromIndex < overIndex) idx = idx - 1;
+          if (!placeBefore) idx = idx + 1;
+          if (idx < 0) idx = 0;
+          const len = Array.isArray(parentValPreview) ? parentValPreview.length : 0;
+          if (idx > len) idx = len;
+          occurrenceWanted = idx;
+        }
+
+        // 在父范围内寻找第 occurrenceWanted 次出现
+        let cursor = 0, count = -1;
+        while (true) {
+          const pos = scopedText.indexOf(blockStr, cursor);
+          if (pos === -1) break;
+          count++;
+          if (count === occurrenceWanted) { hitIndexInScope = pos; break; }
+          cursor = pos + Math.max(1, blockStr.length);
+        }
+        if (hitIndexInScope === -1 && linesInBlock > 1) {
+          try {
+            const re = new RegExp(childPattern, "g");
+            let m; let n = -1;
+            while ((m = re.exec(scopedText))) {
+              n++;
+              if (n === occurrenceWanted) { hitIndexInScope = m.index; break; }
+              if (m.index === re.lastIndex) re.lastIndex++;
+            }
+          } catch(_) {}
+        }
+      } else if (isObject(parentValPreview)) {
+        // 对象：按“同级键顺序”精确到第 N 个键标记，再从该键后的冒号起点定位值起始，避免命中其它相同值
+        const key = String(fromPath[fromPath.length - 1]);
+
+        // 1) 计算该键在“预览父对象”的顺序下标（第 N 个键）
+        const keysOrder = Object.keys(parentValPreview);
+        const keyIndex = keysOrder.indexOf(key);
+
+        // 2) 在父范围文本中，寻找第 keyIndex 次出现的 `"key":` 标记（允许空白）
+        const keyToken = `"${key}"`;
+        const keyTokenPattern = escapeReg(keyToken) + "\\s*:\\s*";
+        let occur = -1;
+        try {
+          const reKey = new RegExp(keyTokenPattern, "g");
+          let m;
+          while ((m = reKey.exec(scopedText))) {
+            occur++;
+            if (occur === keyIndex) {
+              // 将高亮起点对齐到“键名所在行”，避免仅从值起点导致的始终上移一行
+              const keyStartIdx = m.index;
+
+              // 验证值片段存在（允许多行空白差异），用于计算块行数
+              const afterColonIdx = m.index + m[0].length;
+              const reVal = new RegExp("^" + childPattern, "m");
+              const mVal = reVal.exec(scopedText.slice(afterColonIdx));
+              if (mVal) {
+                // 起点改为键名行的开始
+                hitIndexInScope = keyStartIdx;
+                // 单行键值对仍按一行高亮；仅当值为多行块时再额外+1把“键名所在行”包含进去
+                if (linesInBlock > 1) {
+                  linesInBlock = linesInBlock + 1;
+                } else {
+                  linesInBlock = 1;
+                }
+              }
+              break;
+            }
+            // 防止零宽死循环
+            if (m.index === reKey.lastIndex) reKey.lastIndex++;
+          }
+        } catch(_) {}
+
+        // 4) 兜底：若仍未定位，退回到父范围内对值片段的首次匹配（已显著收窄范围）
+        if (hitIndexInScope === -1) {
+          let pos = scopedText.indexOf(blockStr);
+          if (pos === -1 && linesInBlock > 1) {
+            try {
+              const re = new RegExp(childPattern, "m");
+              const m = re.exec(scopedText);
+              if (m) pos = m.index;
+            } catch(_) {}
+          }
+          hitIndexInScope = pos;
+        }
+      }
+
+      if (hitIndexInScope === -1) { hideDragBlockHighlight(); hideInsertGuide(); return; }
+
+      // 计算全局偏移与行号
+      const globalIdx = scopeStart + hitIndexInScope;
+      const before = fullText.slice(0, globalIdx);
+      const startLine = (before.match(/\n/g)?.length || 0) + 1; // 1-based
+      const endLine = startLine + linesInBlock - 1;
+      _dragHL = { startLine, endLine };
+      positionDragBlockHighlight();
+
+      // 计算并显示插入指示线（如果有悬停目标）
+      if (overPathStr != null && placeBefore != null) {
+        try {
+          const overPath = parsePathStr(overPathStr);
+          // 使用预览 AST 与预览文本定位目标块范围
+          const previewAST2 = JSON.parse(previewText);
+          const parentPath2 = overPath.slice(0, -1);
+          const isRoot2 = parentPath2.length === 0;
+          const parentValPreview2 = isRoot2 ? previewAST2 : getByPath(previewAST2, parentPath2);
+
+          const stringify2 = (v) => state.minified ? JSON.stringify(v) : JSON.stringify(v, null, 2);
+          const escapeReg2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const makeFlexibleBlockPattern2 = (s) => escapeReg2(s).replace(/\n/g, "\\s*\\n\\s*");
+
+          const fullText2 = previewText;
+          let scopeStart2 = 0;
+          let scopeEnd2 = fullText2.length;
+
+          if (!isRoot2 && (isObject(parentValPreview2) || Array.isArray(parentValPreview2))) {
+            const parentStr2 = stringify2(parentValPreview2);
+            let parentIdx2 = fullText2.indexOf(parentStr2);
+            if (parentIdx2 === -1 && parentStr2.includes("\n")) {
+              try {
+                const parentRe2 = new RegExp(makeFlexibleBlockPattern2(parentStr2), "m");
+                const mm2 = parentRe2.exec(fullText2);
+                if (mm2) parentIdx2 = mm2.index;
+              } catch (_) {}
+            }
+            if (parentIdx2 !== -1) {
+              scopeStart2 = parentIdx2;
+              scopeEnd2 = parentIdx2 + Math.min(parentStr2.length + 4096, fullText2.length - parentIdx2);
+            }
+          }
+
+          const scopedText2 = fullText2.slice(scopeStart2, scopeEnd2);
+          let targetStartInScope = -1;
+          let targetLines = 1;
+
+          if (Array.isArray(parentValPreview2)) {
+            const targetVal2 = parentValPreview2[overPath.at(-1)];
+            const blockStr2 = stringify2(targetVal2);
+            targetLines = (blockStr2.match(/\n/g)?.length || 0) + 1;
+
+            const overIndex2 = overPath.at(-1);
+            let cursor2 = 0, count2 = -1;
+            while (true) {
+              const pos2 = scopedText2.indexOf(blockStr2, cursor2);
+              if (pos2 === -1) break;
+              count2++;
+              if (count2 === overIndex2) { targetStartInScope = pos2; break; }
+              cursor2 = pos2 + Math.max(1, blockStr2.length);
+            }
+            if (targetStartInScope === -1 && targetLines > 1) {
+              try {
+                const re2 = new RegExp(makeFlexibleBlockPattern2(blockStr2), "g");
+                let m2; let n2 = -1;
+                while ((m2 = re2.exec(scopedText2))) {
+                  n2++;
+                  if (n2 === overIndex2) { targetStartInScope = m2.index; break; }
+                  if (m2.index === re2.lastIndex) re2.lastIndex++;
+                }
+              } catch(_) {}
+            }
+          } else if (isObject(parentValPreview2)) {
+            const key2 = String(overPath.at(-1));
+            const keysOrder2 = Object.keys(parentValPreview2);
+            const keyIndex2 = keysOrder2.indexOf(key2);
+            const keyToken2 = `"${key2}"`;
+            const keyTokenPattern2 = escapeReg2(keyToken2) + "\\s*:\\s*";
+            const valStr2 = stringify2(parentValPreview2[key2]);
+            targetLines = (valStr2.match(/\n/g)?.length || 0) + 1;
+            try {
+              const reKey2 = new RegExp(keyTokenPattern2, "g");
+              let occur2 = -1, mK2;
+              while ((mK2 = reKey2.exec(scopedText2))) {
+                occur2++;
+                if (occur2 === keyIndex2) {
+                  const afterColonIdx2 = mK2.index + mK2[0].length;
+                  const reVal2 = new RegExp("^" + makeFlexibleBlockPattern2(valStr2), "m");
+                  const mV2 = reVal2.exec(scopedText2.slice(afterColonIdx2));
+                  if (mV2) targetStartInScope = afterColonIdx2 + mV2.index;
+                  break;
+                }
+                if (mK2.index === reKey2.lastIndex) reKey2.lastIndex++;
+              }
+            } catch(_) {}
+            if (targetStartInScope === -1) {
+              let pos2 = scopedText2.indexOf(valStr2);
+              if (pos2 === -1 && targetLines > 1) {
+                try {
+                  const re3 = new RegExp(makeFlexibleBlockPattern2(valStr2), "m");
+                  const mm3 = re3.exec(scopedText2);
+                  if (mm3) pos2 = mm3.index;
+                } catch(_) {}
+              }
+              targetStartInScope = pos2;
+            }
+          } else {
+            hideInsertGuide();
+            return;
+          }
+
+          if (targetStartInScope === -1) { hideInsertGuide(); return; }
+
+          // 目标块起止行（基于预览文本）
+          const globalIdx2 = scopeStart2 + targetStartInScope;
+          const before2 = fullText2.slice(0, globalIdx2);
+          const targetStartLine = (before2.match(/\n/g)?.length || 0) + 1;
+          const targetEndLine = targetStartLine + targetLines - 1;
+
+          const insertionLine = placeBefore ? targetStartLine : (targetEndLine + 1);
+          _insertGuideLine = insertionLine;
+          positionInsertGuide();
+        } catch(_) {
+          hideInsertGuide();
+        }
+      } else {
+        hideInsertGuide();
+      }
+    }
+    function hideDragBlockHighlight(){
+      _dragHL = null;
+      if (elTextHL) elTextHL.classList.add("hidden");
+    }
+    function positionDragBlockHighlight(){
+      // 软换行下禁用黄色块，避免错位
+      if (state.wrap) { if (elTextHL) elTextHL.classList.add("hidden"); return; }
+      if (!_dragHL) { if (elTextHL) elTextHL.classList.add("hidden"); return; }
+      // 使用元素真实的偏移与样式，避免因边框/像素四舍五入带来的逐步错位
+      const cs = getComputedStyle(elText);
+      const lineHeight = parseFloat(cs.lineHeight) || 20;
+      const paddingLeft = parseFloat(cs.paddingLeft) || 0;
+      const paddingRight = parseFloat(cs.paddingRight) || 0;
+      const paddingTop = parseFloat(cs.paddingTop) || 0;
+      const borderTop = parseFloat(cs.borderTopWidth) || 0;
+      const borderLeft = parseFloat(cs.borderLeftWidth) || 0;
+
+      const baseLeft = (elText.offsetLeft || 0) + borderLeft + paddingLeft;
+      const baseTop = (elText.offsetTop || 0) + borderTop + paddingTop;
+
+      const top = baseTop + (_dragHL.startLine - 1) * lineHeight - elText.scrollTop;
+      const height = (_dragHL.endLine - _dragHL.startLine + 1) * lineHeight;
+      const width = elText.clientWidth - paddingLeft - paddingRight;
+
+      Object.assign(elTextHL.style, {
+        top: `${top}px`,
+        left: `${baseLeft}px`,
+        width: `${Math.max(0, width)}px`,
+        height: `${Math.max(lineHeight, height)}px`
+      });
+      elTextHL.classList.remove("hidden");
+    }
+
+    // 插入指示线定位/隐藏
+    let _insertGuideLine = null;
+    function hideInsertGuide(){
+      _insertGuideLine = null;
+      if (elTextIns) elTextIns.classList.add("hidden");
+    }
+    function positionInsertGuide(){
+      if (state.wrap) { hideInsertGuide(); return; }
+      if (!_insertGuideLine) { hideInsertGuide(); return; }
+
+      const cs = getComputedStyle(elText);
+      const lineHeight = parseFloat(cs.lineHeight) || 20;
+      const paddingLeft = parseFloat(cs.paddingLeft) || 0;
+      const paddingRight = parseFloat(cs.paddingRight) || 0;
+      const paddingTop = parseFloat(cs.paddingTop) || 0;
+      const borderTop = parseFloat(cs.borderTopWidth) || 0;
+      const borderLeft = parseFloat(cs.borderLeftWidth) || 0;
+
+      const baseLeft = (elText.offsetLeft || 0) + borderLeft + paddingLeft;
+      const baseTop = (elText.offsetTop || 0) + borderTop + paddingTop;
+
+      const top = baseTop + (_insertGuideLine - 1) * lineHeight - elText.scrollTop - 1; // 线居中
+      const width = elText.clientWidth - paddingLeft - paddingRight;
+
+      Object.assign(elTextIns.style, {
+        top: `${top}px`,
+        left: `${baseLeft}px`,
+        width: `${Math.max(0, width)}px`,
+        height: `2px`
+      });
+      elTextIns.classList.remove("hidden");
+    }
+
+    // 删除后左侧文本闪烁标记：用当前文本定位被删块位置，展示黄色描边后淡出
+    function flashDeletedBlockByPath(pathParts){
+      try {
+        const nodeVal = getByPath(state.ast, pathParts);
+        if (typeof nodeVal === "undefined") return;
+        const blockStr = state.minified ? JSON.stringify(nodeVal) : JSON.stringify(nodeVal, null, 2);
+        const txt = elText.value;
+        const at = txt.indexOf(blockStr);
+        if (at === -1) return;
+
+        // 计算行区间
+        const before = txt.slice(0, at);
+        const startLine = (before.match(/\n/g)?.length || 0) + 1; // 1-based
+        const linesInBlock = (blockStr.match(/\n/g)?.length || 0) + 1;
+        const endLine = startLine + linesInBlock - 1;
+
+        // 定位覆盖层（使用专用删除高亮层，避免与拖拽高亮冲突）
+        // 在软换行模式下，为避免错位，删除提示采用文本提示而非覆盖层
+        if (state.wrap) {
+          try {
+            elError.textContent = "已删除选中项（软换行模式下不显示块覆盖提示）";
+            elError.classList.remove("hidden");
+            setTimeout(()=> elError.classList.add("hidden"), 1200);
+          } catch(_) {}
+          return;
+        }
+        const lineHeight = parseFloat(getComputedStyle(elText).lineHeight) || 20;
+        const gutterW = elLines.offsetWidth || 0;
+        const paddingLeft = 8; // textarea p-2
+        const paddingTop = 8;
+        const top = (startLine - 1) * lineHeight - elText.scrollTop + paddingTop;
+        const height = (endLine - startLine + 1) * lineHeight;
+        const left = gutterW + paddingLeft;
+        const width = elText.clientWidth - paddingLeft * 2;
+
+        Object.assign(elTextDelHL.style, {
+          top: `${top}px`,
+          left: `${left}px`,
+          width: `${Math.max(0, width)}px`,
+          height: `${Math.max(lineHeight, height)}px`
+        });
+        elTextDelHL.classList.remove("hidden");
+        elTextDelHL.classList.add("flash-brief");
+        setTimeout(() => {
+          elTextDelHL.classList.remove("flash-brief");
+          elTextDelHL.classList.add("hidden");
+        }, 1200);
+      } catch (e) {
+        console.warn("flashDeletedBlockByPath failed:", e);
+      }
+    }
+
+    elText.addEventListener("scroll", () => {
+      positionDragBlockHighlight();
+      positionInsertGuide();
+      syncGutterScroll();
+    });
+    window.addEventListener("resize", () => {
+      positionDragBlockHighlight();
+      positionInsertGuide();
+    });
+
+    function syncFromAST(){
+      // 根据当前 minified 状态更新文本
+      const txt = state.minified ? JSON.stringify(state.ast) : JSON.stringify(state.ast, null, 2);
+      elText.value = txt;
+      
+      // 清除所有错误状态
+      state.errorLine = null;
+      updateLineNumbers();
+      elError.classList.add("hidden");
+      elError.classList.remove("text-green-600");
+      elError.classList.add("text-red-600");
+      elErrorFrame.classList.add("hidden");
+      elErrorFrame.innerHTML = "";
+      
+      renderTree();
+      // 渲染完成后执行一次高亮并清空标记
+      if (state.flashPath){
+        highlightPathOnce(state.flashPath);
+        state.flashPath = null;
+      }
+      // 如果处于拖拽预览阶段，保持左侧块高亮位置
+      if (state.drag && state.drag.fromPathStr){
+        tryShowDragBlockHighlight(state.drag.fromPathStr, txt);
+      } else {
+        hideDragBlockHighlight();
+        hideInsertGuide();
+      }
+    }
+
+    // 工具按钮
+    btnImport.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try{
+          const txt = String(reader.result || "");
+          const obj = JSON.parse(txt);
+          state.ast = obj;
+          syncFromAST();
+        } catch (err){
+          alert("导入失败：文件内容不是合法 JSON");
+        } finally {
+          fileInput.value = "";
+        }
+      };
+      reader.readAsText(file, "utf-8");
+    });
+
+    btnExport.addEventListener("click", () => {
+      const blob = new Blob([state.minified ? JSON.stringify(state.ast) : JSON.stringify(state.ast, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "data.json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+    btnMinify.addEventListener("click", () => {
+      state.minified = true;
+      syncFromAST();
+    });
+    // 美化：格式化为带缩进的可读 JSON
+    btnPretty.addEventListener("click", () => {
+      state.minified = false;
+      syncFromAST();
+    });
+
+    // 撤销/重做
+    btnUndo.addEventListener("click", () => {
+      if (state.history.length === 0) return;
+      const cur = snapshot();
+      const prev = state.history.pop();
+      state.future.push(cur);
+      restoreFromSnapshot(prev);
+      updateUndoRedo();
+    });
+    btnRedo.addEventListener("click", () => {
+      if (state.future.length === 0) return;
+      const cur = snapshot();
+      const next = state.future.pop();
+      state.history.push(cur);
+      restoreFromSnapshot(next);
+      updateUndoRedo();
+    });
+
+    btnCollapseAll.addEventListener("click", () => {
+      // 简单策略：将对象树所有路径加入折叠集
+      state.collapse.clear();
+      function collect(pathParts, v){
+        const pathStr = pathJoin(pathParts);
+        state.collapse.add(pathStr);
+        if (isObject(v)){
+          for (const k of Object.keys(v)) collect(pathParts.concat(k), v[k]);
+        } else if (isArray(v)){
+          v.forEach((it, idx) => collect(pathParts.concat(idx), it));
+        }
+      }
+      collect([], state.ast);
+      renderTree();
+    });
+    btnExpandAll.addEventListener("click", () => {
+      state.collapse.clear();
+      renderTree();
+    });
+
+    // JSON 常识 Modal 交互
+    function openKnowledge(){
+      knowledgeModal.classList.remove("hidden");
+      knowledgeModal.classList.add("flex");
+    }
+    function closeKnowledge(){
+      knowledgeModal.classList.add("hidden");
+      knowledgeModal.classList.remove("flex");
+    }
+    if (btnKnowledge) btnKnowledge.addEventListener("click", openKnowledge);
+    if (knClose) knClose.addEventListener("click", closeKnowledge);
+    if (knOk) knOk.addEventListener("click", closeKnowledge);
+
+    // YAML 转换 Modal 逻辑
+    function openYamlModal(mode = "import", text = "") {
+      yamlMode = mode;
+      yamlText.value = text || "";
+      yamlModalTitle.textContent = mode === "export" ? "JSON → YAML（导出）" : "YAML → JSON（导入）";
+      if (mode === "export") {
+        yamlCopy.classList.remove("hidden");
+        yamlDownload.classList.remove("hidden");
+        yamlConfirm.classList.add("hidden");
+        if (yamlConvert) yamlConvert.classList.remove("hidden");
+        yamlTip.textContent = "已生成 YAML，可复制或下载为 .yaml 文件。也可粘贴 JSON，点击“转换”转为 YAML。";
+      } else {
+        yamlCopy.classList.add("hidden");
+        yamlDownload.classList.add("hidden");
+        yamlConfirm.classList.remove("hidden");
+        if (yamlConvert) yamlConvert.classList.add("hidden");
+        yamlTip.textContent = "粘贴 YAML 内容后点击“确定”导入为 JSON。";
+      }
+      yamlModal.classList.remove("hidden");
+      yamlModal.classList.add("flex");
+    }
+    function closeYamlModal(){
+      yamlModal.classList.add("hidden");
+      yamlModal.classList.remove("flex");
+    }
+    if (yamlClose) yamlClose.addEventListener("click", closeYamlModal);
+    if (yamlCancel) yamlCancel.addEventListener("click", closeYamlModal);
+    if (btnJson2Yaml) btnJson2Yaml.addEventListener("click", () => {
+      try {
+        const yamlStr = (window.jsyaml && window.jsyaml.dump) ? window.jsyaml.dump(state.ast, { lineWidth: -1 }) : "";
+        openYamlModal("export", yamlStr);
+      } catch (e) {
+        alert("转换失败：" + (e && e.message ? e.message : String(e)));
+      }
+    });
+    if (btnYaml2Json) btnYaml2Json.addEventListener("click", () => {
+      openYamlModal("import", "");
+    });
+    if (yamlConfirm) yamlConfirm.addEventListener("click", () => {
+      const txt = yamlText.value || "";
+      try {
+        const obj = (window.jsyaml && window.jsyaml.load) ? window.jsyaml.load(txt) : null;
+        if (obj == null) throw new Error("解析结果为空");
+        pushHistory();
+        state.ast = obj;
+        closeYamlModal();
+        syncFromAST();
+      } catch (e) {
+        alert("导入失败：YAML 解析错误 - " + (e && e.message ? e.message : String(e)));
+      }
+    });
+    if (yamlConvert) yamlConvert.addEventListener("click", () => {
+      try {
+        const raw = yamlText.value || "";
+        const obj = JSON.parse(raw); // 仅按 JSON 解析
+        const yamlStr = (window.jsyaml && window.jsyaml.dump) ? window.jsyaml.dump(obj, { lineWidth: -1 }) : "";
+        if (!yamlStr) throw new Error("转换器不可用");
+        yamlText.value = yamlStr;
+        yamlTip.textContent = "已从 JSON 转为 YAML";
+      } catch (e) {
+        alert("转换失败：文本框内容不是合法 JSON，无法转为 YAML。");
+      }
+    });
+    if (yamlCopy) yamlCopy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(yamlText.value || "");
+        yamlTip.textContent = "已复制到剪贴板";
+        setTimeout(() => {
+          yamlTip.textContent = yamlMode === "export" ? "已生成 YAML，可复制或下载为 .yaml 文件。" : "粘贴 YAML 内容后点击“确定”导入为 JSON。";
+        }, 1500);
+      } catch (_) {
+        alert("复制失败，请手动复制");
+      }
+    });
+    if (yamlDownload) yamlDownload.addEventListener("click", () => {
+      const blob = new Blob([yamlText.value || ""], { type: "text/yaml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "data.yaml";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+    btnRootAdd.addEventListener("click", () => {
+      const rootIsArray = isArray(state.ast);
+      if (!(isObject(state.ast) || isArray(state.ast))) {
+        // 如果根是原始值，先将其变为对象
+        state.ast = {};
+      }
+      openTemplateModal({ parentPath: [], forArray: rootIsArray });
+    });
+
+    // 初始内容
+    function initDefault(){
+      const initObj = {
+        标题: "示例 JSON",
+        版本: 1,
+        启用: true,
+        列表: [
+          { name: "条目1", value: 100 },
+          { name: "条目2", value: 200 }
+        ],
+        配置: {
+          作者: "匿名",
+          标签: ["json","编辑","示例"]
+        }
+      };
+      state.ast = initObj;
+      state.minified = false;
+      syncFromAST();
+    }
+
+    // 启动
+    initDefault();
+    updateLineNumbers();
+    updateUndoRedo();
+  // === 拖拽自动滚动辅助：拖动把手时支持自动上下滚动（树容器优先，其次窗口） ===
+// 变量已提前到顶部预声明（避免 TDZ）
+
+function _isDragging() {
+  return !!(state.drag && state.drag.fromPathStr);
+}
+
+// 记录拖拽中的鼠标 Y 位置
+document.addEventListener("dragover", (e) => {
+  _dragMouseY = e.clientY || 0;
+}, false);
+
+// 全局兜底：结束拖拽或丢弃时，强制清理状态并恢复换行与行号
+function cleanupDragGlobals(){
+  // 隐藏指示
+  hideInsertGuide();
+  hideDragBlockHighlight();
+  // 恢复软换行与行号（若拖拽前是开启的）
+  if (state.drag) {
+    const prevWrap = typeof state.drag.prevWrap === "boolean" ? state.drag.prevWrap : null;
+    state.drag = null;
+    if (prevWrap !== null) {
+      state.wrap = prevWrap;
+      if (prevWrap) elText.classList.remove("no-wrap");
+      updateLineNumbers();
+    }
+  }
+}
+document.addEventListener("dragend", () => {
+  cleanupDragGlobals();
+}, false);
+document.addEventListener("drop", () => {
+  cleanupDragGlobals();
+}, false);
+
+// 兜底：当用户松开鼠标/按下 ESC/切换标签页时，确保清理拖拽态（防止高亮残留）
+window.addEventListener("mouseup", () => {
+  if (_isDragging()) cleanupDragGlobals();
+}, true);
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && _isDragging()) cleanupDragGlobals();
+}, true);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && _isDragging()) cleanupDragGlobals();
+}, false);
+
+// 尝试滚动某个可滚动容器（优先树容器）
+function _scrollContainerIfNeeded(container, y, margin = 64, maxStep = 24) {
+  if (!container) return false;
+  const rect = container.getBoundingClientRect();
+  const canScroll = (container.scrollHeight - container.clientHeight) > 1;
+  if (!canScroll) return false;
+
+  let dy = 0;
+  if (y < rect.top + margin) {
+    dy = -Math.min(maxStep, (rect.top + margin - y) / 4);
+  } else if (y > rect.bottom - margin) {
+    dy = Math.min(maxStep, (y - (rect.bottom - margin)) / 4);
+  }
+  if (dy !== 0) {
+    container.scrollTop += dy;
+    return true;
+  }
+  return false;
+}
+
+// 兜底：滚动窗口
+function _scrollWindowIfNeeded(y, margin = 64, maxStep = 24) {
+  let dy = 0;
+  if (y < margin) {
+    dy = -Math.min(maxStep, (margin - y) / 4);
+  } else if (y > (window.innerHeight - margin)) {
+    dy = Math.min(maxStep, (y - (window.innerHeight - margin)) / 4);
+  }
+  if (dy !== 0) {
+    window.scrollBy(0, dy);
+    return true;
+  }
+  return false;
+}
+
+// 自动滚动循环（在 dragstart 时启动，在 dragend/drop 时由现有逻辑停止）
+function autoScrollTick() {
+  if (!_isDragging()) { _autoScrollRAF = 0; return; }
+  const y = _dragMouseY || 0;
+  // 优先滚动右侧树容器（小屏为可滚动），若无可滚动空间则滚动窗口
+  const did = _scrollContainerIfNeeded(elTree, y);
+  if (!did) _scrollWindowIfNeeded(y);
+  _autoScrollRAF = requestAnimationFrame(autoScrollTick);
+}
+</script>
+</body>
+</html>
