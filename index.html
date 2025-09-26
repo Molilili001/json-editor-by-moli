@@ -407,29 +407,69 @@
     };
     // 历史与撤销/重做
     function snapshot() {
-      try { return JSON.stringify(state.ast); } catch (_) { return "{}"; }
+      try {
+        if (typeof elText !== "undefined" && elText && typeof elText.value === "string") {
+          return elText.value;
+        }
+        return state.minified ? JSON.stringify(state.ast) : JSON.stringify(state.ast, null, 2);
+      } catch (_) {
+        return "";
+      }
     }
     function restoreFromSnapshot(s) {
       try {
-        state.ast = JSON.parse(s);
+        if (typeof s !== "string") return;
+        endTypingSession();
+        elText.value = s;
+        _lastTextValue = s;
+        updateLineNumbers();
+        // 尝试解析并应用（失败则仅展示错误，不强制覆盖 AST）
+        tryParseAndApply();
       } catch (_) {
-        state.ast = {};
+        // ignore
       }
-      syncFromAST();
     }
     function updateUndoRedo() {
       btnUndo.disabled = state.history.length === 0;
       btnRedo.disabled = state.future.length === 0;
     }
+    const MAX_HISTORY = 200;
     function pushHistory() {
       try {
         const snap = snapshot();
-        state.history.push(snap);
+        const h = state.history;
+        if (!h.length || h[h.length - 1] !== snap) {
+          h.push(snap);
+          if (h.length > MAX_HISTORY) h.splice(0, h.length - MAX_HISTORY);
+        }
         state.future = [];
         updateUndoRedo();
       } catch (e) {
         console.warn("pushHistory error:", e);
       }
+    }
+    function pushHistoryText(txt) {
+      try {
+        if (typeof txt !== "string") return;
+        const h = state.history;
+        if (!h.length || h[h.length - 1] !== txt) {
+          h.push(txt);
+          if (h.length > MAX_HISTORY) h.splice(0, h.length - MAX_HISTORY);
+        }
+        state.future = [];
+        updateUndoRedo();
+      } catch (e) {
+        console.warn("pushHistoryText error:", e);
+      }
+    }
+    function endTypingSession() {
+      try {
+        if (typeof _typingSessionTimer !== "undefined" && _typingSessionTimer) {
+          clearTimeout(_typingSessionTimer);
+          _typingSessionTimer = null;
+        }
+        if (typeof _typingSessionActive !== "undefined") _typingSessionActive = false;
+      } catch (_) {}
     }
 
     // 工具函数
@@ -637,6 +677,10 @@
     // 预声明拖拽滚动所需的全局量，避免在 dragstart 前进入 TDZ
     let _dragMouseY = 0;
     let _autoScrollRAF = 0;
+    // 文本撤销需要的会话状态
+    let _lastTextValue = "";
+    let _typingSessionActive = false;
+    let _typingSessionTimer = null;
 
     // 行号滚动同步：使用 transform 位移，避免独立滚动条不同步
     function syncGutterScroll(){
@@ -782,8 +826,22 @@
       syncGutterScroll();
     }
     elText.addEventListener("input", () => {
+      // 文本编辑撤销：在一次连续输入开始时保存“变更前”的文本
+      if (!_typingSessionActive) {
+        pushHistoryText(_lastTextValue);
+        _typingSessionActive = true;
+      }
+      if (_typingSessionTimer) clearTimeout(_typingSessionTimer);
+      _typingSessionTimer = setTimeout(() => { endTypingSession(); }, 1000);
+
+      // 更新当前文本缓存
+      _lastTextValue = elText.value;
+
       updateLineNumbers();
       scheduleParse();
+    });
+    elText.addEventListener("blur", () => {
+      endTypingSession();
     });
     elText.addEventListener("scroll", () => {
       syncGutterScroll();
@@ -1889,6 +1947,7 @@
       // 根据当前 minified 状态更新文本
       const txt = state.minified ? JSON.stringify(state.ast) : JSON.stringify(state.ast, null, 2);
       elText.value = txt;
+      _lastTextValue = txt;
       
       // 清除所有错误状态
       state.errorLine = null;
@@ -1924,6 +1983,7 @@
         try{
           const txt = String(reader.result || "");
           const obj = JSON.parse(txt);
+          pushHistory();
           state.ast = obj;
           syncFromAST();
         } catch (err){
@@ -1948,11 +2008,13 @@
     });
 
     btnMinify.addEventListener("click", () => {
+      pushHistory();
       state.minified = true;
       syncFromAST();
     });
     // 美化：格式化为带缩进的可读 JSON
     btnPretty.addEventListener("click", () => {
+      pushHistory();
       state.minified = false;
       syncFromAST();
     });
@@ -1960,17 +2022,23 @@
     // 撤销/重做
     btnUndo.addEventListener("click", () => {
       if (state.history.length === 0) return;
+      endTypingSession();
       const cur = snapshot();
       const prev = state.history.pop();
-      state.future.push(cur);
+      if (!state.future.length || state.future[state.future.length - 1] !== cur) {
+        state.future.push(cur);
+      }
       restoreFromSnapshot(prev);
       updateUndoRedo();
     });
     btnRedo.addEventListener("click", () => {
       if (state.future.length === 0) return;
+      endTypingSession();
       const cur = snapshot();
       const next = state.future.pop();
-      state.history.push(cur);
+      if (!state.history.length || state.history[state.history.length - 1] !== cur) {
+        state.history.push(cur);
+      }
       restoreFromSnapshot(next);
       updateUndoRedo();
     });
@@ -2098,7 +2166,9 @@
       const rootIsArray = isArray(state.ast);
       if (!(isObject(state.ast) || isArray(state.ast))) {
         // 如果根是原始值，先将其变为对象
+        pushHistory();
         state.ast = {};
+        // 不立刻同步文本，待确认新增后统一渲染
       }
       openTemplateModal({ parentPath: [], forArray: rootIsArray });
     });
@@ -2127,6 +2197,22 @@
     initDefault();
     updateLineNumbers();
     updateUndoRedo();
+
+    // 全局快捷键：当焦点不在文本框时，Ctrl/Cmd+Z/Y 使用编辑器撤销/重做
+    document.addEventListener("keydown", (e) => {
+      const isMac = navigator.platform && /Mac/i.test(navigator.platform);
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (!mod) return;
+      const isTextFocused = document.activeElement === elText;
+      const k = (e.key || "").toLowerCase();
+      if (k === "z" && !isTextFocused) {
+        e.preventDefault();
+        btnUndo.click();
+      } else if ((k === "y" || (k === "z" && e.shiftKey)) && !isTextFocused) {
+        e.preventDefault();
+        btnRedo.click();
+      }
+    });
   // === 拖拽自动滚动辅助：拖动把手时支持自动上下滚动（树容器优先，其次窗口） ===
 // 变量已提前到顶部预声明（避免 TDZ）
 
