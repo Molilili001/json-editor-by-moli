@@ -141,7 +141,26 @@
       color:#dc2626;
       font-weight:bold;
     }
-  </style>
+  /* 视觉美化与移动端适配增强 */
+  /* 轻柔卡片阴影与白底，保持功能不变，仅提升观感 */
+  .card-soft { background:#fff; box-shadow: 0 8px 24px rgba(0,0,0,.06); border-radius:4px; }
+  .card-head { background: rgba(99,102,241,0.06); } /* indigo-500 的淡背景 */
+  /* 按钮悬停与过渡动画（不改变语义，仅视觉） */
+  .btn-anim { transition: transform .15s ease, box-shadow .2s ease; }
+  .btn-anim:hover { transform: translateY(-1px); box-shadow: 0 6px 14px rgba(0,0,0,.12); }
+  /* 移动端标签栏：仅小屏显示 */
+  .tabs-mobile { display:flex; gap:.5rem; align-items:center; }
+  @media (min-width:1024px){ .tabs-mobile{ display:none; } }
+  .tab-btn { border:1px solid rgba(0,0,0,.2); border-radius:4px; padding:.5rem .75rem; font-size:.875rem; }
+  .tab-btn.active { background:#000; color:#fff; }
+  /* 更柔和的滚动条色调（与整体配色协调） */
+  ::-webkit-scrollbar-thumb{background:rgba(99,102,241,.25)}
+  /* 结构树紧凑模式（移动端自然生效） */
+  .tree-compact .tap-target{ min-height:40px; }
+  .tree-compact .ln{ line-height:1.1rem; }
+  /* 统一图标大小 */
+  .icon-4 { width:16px; height:16px; }
+</style>
   <!-- Flowbite 和 Lucide 图标 -->
   <script src="https://cdn.jsdelivr.net/npm/flowbite@2.0.0/dist/flowbite.min.js"></script>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -156,22 +175,44 @@
           <span class="text-2xl font-bold tracking-tight whitespace-nowrap">moli的JSON编辑器</span>
         </div>
         <nav class="flex items-center flex-wrap gap-2 md:gap-3 ml-auto justify-end">
-          <button id="btn-import" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">导入</button>
-          <button id="btn-export" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">导出</button>
+          <button id="btn-import" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim">
+            <i data-lucide="download" class="icon-4"></i><span class="ml-1">导入</span>
+          </button>
+          <button id="btn-export" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim">
+            <i data-lucide="upload" class="icon-4"></i><span class="ml-1">导出</span>
+          </button>
           <div class="w-px h-6 bg-black/10 mx-1 md:mx-2"></div>
-          <button id="btn-undo" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition" title="撤销 Ctrl+Z" disabled>撤销</button>
-          <button id="btn-redo" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition" title="前进 Ctrl+Y" disabled>前进</button>
+          <button id="btn-undo" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim" title="撤销 Ctrl+Z" disabled>
+            <i data-lucide="undo-2" class="icon-4"></i><span class="ml-1">撤销</span>
+          </button>
+          <button id="btn-redo" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim" title="前进 Ctrl+Y" disabled>
+            <i data-lucide="redo-2" class="icon-4"></i><span class="ml-1">前进</span>
+          </button>
           <div class="w-px h-6 bg-black/10 mx-1 md:mx-2"></div>
-          <button id="btn-minify" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition" title="去除空格与换行">拍扁</button>
-          <button id="btn-pretty" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">美化</button>
+          <button id="btn-minify" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim" title="去除空格与换行">
+            <i data-lucide="minimize-2" class="icon-4"></i><span class="ml-1">拍扁</span>
+          </button>
+          <button id="btn-pretty" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim">
+            <i data-lucide="sparkles" class="icon-4"></i><span class="ml-1">美化</span>
+          </button>
           <div class="w-px h-6 bg-black/10 mx-1 md:mx-2"></div>
-          <button id="btn-collapse-all" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">折叠全部</button>
-          <button id="btn-expand-all" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">展开全部</button>
+          <button id="btn-collapse-all" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim">
+            <i data-lucide="fold-horizontal" class="icon-4"></i><span class="ml-1">折叠全部</span>
+          </button>
+          <button id="btn-expand-all" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim">
+            <i data-lucide="unfold-horizontal" class="icon-4"></i><span class="ml-1">展开全部</span>
+          </button>
           <div class="w-px h-6 bg-black/10 mx-1 md:mx-2"></div>
-          <button id="btn-knowledge" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition">JSON常识</button>
+          <button id="btn-knowledge" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim">
+            <i data-lucide="book-open" class="icon-4"></i><span class="ml-1">JSON常识</span>
+          </button>
           <div class="basis-full"></div>
-          <button id="btn-json2yaml" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition" title="将当前 JSON 转为 YAML">JSON→YAML</button>
-          <button id="btn-yaml2json" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition" title="将 YAML 转为 JSON">YAML→JSON</button>
+          <button id="btn-json2yaml" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim" title="将当前 JSON 转为 YAML">
+            <i data-lucide="file-code" class="icon-4"></i><span class="ml-1">JSON→YAML</span>
+          </button>
+          <button id="btn-yaml2json" class="tap-target focus-ring px-3 py-2 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition btn-anim" title="将 YAML 转为 JSON">
+            <i data-lucide="file-json" class="icon-4"></i><span class="ml-1">YAML→JSON</span>
+          </button>
         </nav>
       </div>
     </div>
@@ -180,10 +221,19 @@
   <!-- 主体：双栏布局 -->
   <main class="flex-1">
     <div class="mx-auto max-w-7xl px-4 md:px-8 py-4 md:py-6">
+      <!-- 移动端标签切换：不改动桌面双栏，仅在小屏隐藏/显示两面板 -->
+      <div class="tabs-mobile mb-3">
+        <button id="tab-content" class="tap-target focus-ring tab-btn active btn-anim" title="内容面板">
+          <i data-lucide="file-text" class="icon-4"></i><span class="ml-1">内容</span>
+        </button>
+        <button id="tab-structure" class="tap-target focus-ring tab-btn btn-anim" title="结构面板">
+          <i data-lucide="tree-pine" class="icon-4"></i><span class="ml-1">结构</span>
+        </button>
+      </div>
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
         <!-- 左侧：JSON 文本 -->
-        <section class="border border-black/10 rounded !rounded-[4px]">
-          <header class="px-4 py-3 border-b border-black/10 flex items-center justify-between">
+        <section id="panel-content" class="border border-black/10 rounded !rounded-[4px] bg-white shadow-sm md:shadow card-soft">
+          <header class="px-4 py-3 border-b border-black/10 flex items-center justify-between card-head">
             <h2 class="text-lg font-semibold">内容</h2>
             <div class="text-xs text-black/60">实时解析</div>
           </header>
@@ -207,8 +257,8 @@
         </section>
 
         <!-- 右侧：结构树 -->
-        <section class="border border-black/10 rounded !rounded-[4px] overflow-hidden">
-          <header class="px-4 py-3 border-b border-black/10 flex items-center justify-between">
+        <section id="panel-structure" class="border border-black/10 rounded !rounded-[4px] overflow-hidden bg-white shadow-sm md:shadow card-soft">
+          <header class="px-4 py-3 border-b border-black/10 flex items-center justify-between card-head">
             <h2 class="text-lg font-semibold flex items-baseline gap-2">结构 <span class="text-xs text-black/60">(同一层级颜色相同)</span></h2>
             <div class="flex items-center gap-2">
               <button id="btn-root-add" class="tap-target focus-ring px-2 py-1 text-sm border border-black/20 rounded !rounded-[4px] hover:bg-black hover:text-white transition flex items-center gap-1" title="在根添加键或项">
@@ -1298,8 +1348,10 @@
       } else {
         // 数组项索引或根
         const label = document.createElement("span");
-        label.className = "text-black/60";
+        label.className = "text-black/60 truncate max-w-[50%]";
         label.textContent = parent ? "["+key+"]" : "(root)";
+        // 完整提示以解决“字数过多显得杂乱”的问题
+        label.title = parent ? "["+key+"]" : "(root)";
         try { label.style.color = depthColorOf(depth); } catch(_) {}
         container.appendChild(label);
       }
@@ -1355,6 +1407,8 @@
         const valInput = document.createElement("input");
         valInput.className = "focus-ring border border-black/20 rounded !rounded-[4px] px-2 py-1 text-sm w-0 flex-1 min-w-0 max-w-full truncate";
         valInput.value = typeof value === "string" ? value : String(value);
+        // 悬停显示完整内容，视觉上保持截断，减少杂乱
+        try { valInput.title = typeof value === "string" ? value : String(value); } catch(_) {}
         valInput.placeholder = "编辑值";
         // 防止回车或退格键影响其他控件
         valInput.addEventListener("keydown", (e) => {
@@ -2197,6 +2251,47 @@
     initDefault();
     updateLineNumbers();
     updateUndoRedo();
+
+    // 移动端标签切换逻辑：小屏幕下显示单面板，桌面保持双栏
+    const panelContent = document.getElementById("panel-content");
+    const panelStructure = document.getElementById("panel-structure");
+    const tabContentBtn = document.getElementById("tab-content");
+    const tabStructureBtn = document.getElementById("tab-structure");
+
+    function isSmallScreen(){ return window.innerWidth < 1024; } // lg 断点
+
+    function applyTabVisibility(){
+      if (!panelContent || !panelStructure) return;
+      if (isSmallScreen()){
+        const isContentActive = tabContentBtn && tabContentBtn.classList.contains("active");
+        panelContent.classList.toggle("hidden", !isContentActive);
+        panelStructure.classList.toggle("hidden", isContentActive);
+        // 移动端结构树紧凑模式
+        panelStructure.classList.add("tree-compact");
+      } else {
+        // 桌面同时可见
+        panelContent.classList.remove("hidden");
+        panelStructure.classList.remove("hidden");
+        // 桌面还原为非紧凑模式
+        panelStructure.classList.remove("tree-compact");
+      }
+    }
+    function activateTab(tab){
+      if (!tabContentBtn || !tabStructureBtn) return;
+      if (tab === "content"){
+        tabContentBtn.classList.add("active");
+        tabStructureBtn.classList.remove("active");
+      } else {
+        tabStructureBtn.classList.add("active");
+        tabContentBtn.classList.remove("active");
+      }
+      applyTabVisibility();
+    }
+    if (tabContentBtn) tabContentBtn.addEventListener("click", ()=> activateTab("content"));
+    if (tabStructureBtn) tabStructureBtn.addEventListener("click", ()=> activateTab("structure"));
+    window.addEventListener("resize", applyTabVisibility);
+    // 初始应用一次
+    applyTabVisibility();
 
     // 全局快捷键：当焦点不在文本框时，Ctrl/Cmd+Z/Y 使用编辑器撤销/重做
     document.addEventListener("keydown", (e) => {
